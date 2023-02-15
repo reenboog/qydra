@@ -1,0 +1,25 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "rust: cargo nextest",
+			"type": "shell",
+			"command": "cargo nextest run",
+			"args": [],
+			"group": {
+				"kind": "test",
+				"isDefault": false
+			}
+		},
+
+		{
+		"label": "rust: cargo test",
+		"type": "shell",
+		"command": "cargo test",
+		"args": [],
+		"group": {
+			"kind": "test",
+			"isDefault": false
+		}
+	}]
+}
