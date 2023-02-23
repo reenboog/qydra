@@ -57,11 +57,10 @@ mod tests {
 	};
 
 	#[test]
-	fn test_hash_non_zeroes() {
-		//
-		let mut r = Roster::new();
+	fn test_hash() {
+		let mut r1 = Roster::new();
 
-		r.add(Member::new(
+		r1.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
 				ek: [34u8; 768],
@@ -69,5 +68,40 @@ mod tests {
 				signature: Signature::new([78u8; 4595]),
 			},
 		));
+
+		r1.add(Member::new(
+			Id([34u8; 32]),
+			KeyPackage {
+				ek: [56u8; 768],
+				svk: PublicKey::new([78u8; 2592]),
+				signature: Signature::new([90u8; 4595]),
+			},
+		));
+
+		let mut r2 = Roster::new();
+
+		r2.add(Member::new(
+			Id([34u8; 32]),
+			KeyPackage {
+				ek: [56u8; 768],
+				svk: PublicKey::new([78u8; 2592]),
+				signature: Signature::new([90u8; 4595]),
+			},
+		));
+
+		r2.add(Member::new(
+			Id([12u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
+
+		// ensure sorting
+		assert_eq!(r1.hash(), r2.hash());
+
+		// and non-zeroes
+		assert_ne!(r1.hash(), [0u8; 32]);
 	}
 }

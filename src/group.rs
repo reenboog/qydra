@@ -100,15 +100,15 @@ impl Group {
 	}
 
 	// used for signing commits and proposals when packing only; do I need it at all?
-	fn ctx_w_interim(&self) -> Hash {
-		Self::derive_ctx(
-			&self.uid,
-			self.epoch,
-			&self.roster,
-			&self.conf_trans_hash,
-			&self.interim_trans_hash,
-		)
-	}
+	// fn ctx_w_interim(&self) -> Hash {
+	// 	Self::derive_ctx(
+	// 		&self.uid,
+	// 		self.epoch,
+	// 		&self.roster,
+	// 		&self.conf_trans_hash,
+	// 		&self.interim_trans_hash,
+	// 	)
+	// }
 }
 
 impl Group {
