@@ -7,3 +7,14 @@ author = "Alex Gievsky"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# keys
+ilum = { git = "https://github.com/reenboog/ilum", version = "0.1.0" }
+pqcrypto-dilithium = { version = "0.4.6" }
+
+# randomness
+rand = { version = "0.8.5" }
+rand-07 = { package = "rand", version = "0.7.0" }
+
+# hashing
+sha2 = { version = "0.10" }
+hmac = { version = "0.12.1" }

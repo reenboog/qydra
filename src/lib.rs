@@ -1,14 +1,11 @@
-pub fn add(left: usize, right: usize) -> usize {
-	left + right
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn it_works() {
-		let result = add(2, 2);
-		assert_eq!(result, 4);
-	}
-}
+pub mod commit;
+pub mod dilithium;
+pub mod group;
+pub mod hash;
+pub mod hkdf;
+pub mod hmac;
+pub mod key_package;
+pub mod member;
+pub mod roster;
+pub mod update;
+pub mod key_schedule;
