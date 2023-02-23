@@ -14,16 +14,14 @@ pub struct PrivateKey {
 #[derive(Clone)]
 pub struct PublicKey {
 	// TODO: implement
-	bytes: [u8; Self::SIZE]
+	bytes: [u8; Self::SIZE],
 }
 
 impl PublicKey {
 	pub const SIZE: usize = PQCLEAN_DILITHIUM5AES_CLEAN_CRYPTO_PUBLICKEYBYTES;
 
 	pub fn new(bytes: [u8; Self::SIZE]) -> Self {
-		Self {
-			bytes,
-		}
+		Self { bytes }
 	}
 }
 
@@ -61,9 +59,7 @@ impl Signature {
 
 	// TODO: implement
 	pub fn new(bytes: [u8; Self::SIZE]) -> Self {
-		Self {
-			bytes,
-		}
+		Self { bytes }
 	}
 }
 

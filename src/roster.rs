@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 
 use crate::{
 	hash::{Hash, Hashable},
-	member::{Id, Member, self},
+	member::{Id, Member},
 };
 
 pub struct Roster {
+	// order is important, hence BTreeMap instead of HashMap
 	members: BTreeMap<Id, Member>,
 }
 
@@ -47,14 +48,26 @@ impl Hashable for Roster {
 
 #[cfg(test)]
 mod tests {
-	use crate::{key_package::KeyPackage, member::{Member, Id}, dilithium::{PublicKey, Signature}, hash::Hashable};
 	use super::Roster;
+	use crate::{
+		dilithium::{PublicKey, Signature},
+		hash::Hashable,
+		key_package::KeyPackage,
+		member::{Id, Member},
+	};
 
 	#[test]
 	fn test_hash_non_zeroes() {
 		//
 		let mut r = Roster::new();
 
-		r.add(Member::new(Id([12u8; 32]), KeyPackage { ek: [34u8; 768], svk: PublicKey::new([56u8; 2592]), signature: Signature::new([78u8; 4595]) }));
+		r.add(Member::new(
+			Id([12u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
 	}
 }

@@ -5,7 +5,7 @@ pub mod hash;
 pub mod hkdf;
 pub mod hmac;
 pub mod key_package;
+pub mod key_schedule;
 pub mod member;
 pub mod roster;
 pub mod update;
-pub mod key_schedule;
