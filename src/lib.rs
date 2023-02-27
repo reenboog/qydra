@@ -7,5 +7,7 @@ pub mod hmac;
 pub mod key_package;
 pub mod key_schedule;
 pub mod member;
+pub mod proposal;
 pub mod roster;
+pub mod serializable;
 pub mod update;

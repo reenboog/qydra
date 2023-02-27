@@ -11,6 +11,13 @@ pub struct PrivateKey {
 	// TODO: either implement multilayering or import from bxolotl
 }
 
+impl PrivateKey {
+	pub fn sign(&self, msg: &[u8]) -> Signature {
+		// TODO: implement
+		todo!()
+	}
+}
+
 #[derive(Clone)]
 pub struct PublicKey {
 	// TODO: implement
@@ -28,6 +35,13 @@ impl PublicKey {
 impl PublicKey {
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
 		&self.bytes
+	}
+}
+
+impl PublicKey {
+	pub fn verify(&self, msg: &[u8]) -> bool {
+		// TODO: implement
+		todo!()
 	}
 }
 

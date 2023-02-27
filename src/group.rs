@@ -5,9 +5,10 @@ use rand::Rng;
 
 use crate::commit::PendingCommit;
 use crate::hash::{self, Hash, Hashable};
-use crate::key_package::KeyPackage;
+use crate::key_package::{self, KeyPackage};
 use crate::key_schedule::EpochSecrets;
 use crate::member::{Id, Member};
+use crate::proposal::{FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
 use crate::{dilithium, hmac, key_schedule};
@@ -99,6 +100,52 @@ impl Group {
 		)
 	}
 
+	// TODO: this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
+	pub fn propose_add(&self, id: Id, kp: KeyPackage) -> FramedProposal {
+		// FIXME: use a result instead
+		assert!(!self.roster.contains(&id));
+
+		self.frame_proposal(Proposal::Add { id, kp })
+	}
+
+	// TODO: use Result instead
+	pub fn propose_remove(&self, id: &Id) -> FramedProposal {
+		// FIXME: use a result instead
+		assert!(self.roster.contains(id));
+
+		self.frame_proposal(Proposal::Remove { id: id.clone() })
+	}
+
+	pub fn propose_update(&mut self) -> FramedProposal {
+		let (kp, sk) = self.gen_kp();
+		let fp = self.frame_proposal(Proposal::Update { kp });
+		let pu = PendingUpdate::new(sk, self.ssk.clone()); // TODO: make update ssk as well
+
+		self.pending_updates.insert(fp.id(), pu);
+
+		fp
+	}
+
+	fn frame_proposal(&self, proposal: Proposal) -> FramedProposal {
+		// sig = sign(proposal)
+		// tag = mac(proposal + sig)
+		todo!()
+		// TODO: apply current epoch and other state
+	}
+
+	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey) {
+		// TODO: update signing key as well
+
+		let kp = ilum::gen_keypair(&self.seed);
+		let package = KeyPackage::new(
+			&kp.pk,
+			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap
+			&self.ssk,
+		);
+
+		(package, kp.sk)
+	}
+
 	// used for signing commits and proposals when packing only; do I need it at all?
 	// fn ctx_w_interim(&self) -> Hash {
 	// 	Self::derive_ctx(
@@ -109,6 +156,14 @@ impl Group {
 	// 		&self.interim_trans_hash,
 	// 	)
 	// }
+
+	fn verify_kp(id: &Id, kp: &KeyPackage) {
+		// id == pk.id
+		// if I don't have kp in my certs
+		// send a VERIFY req to the backend: // almost TOFU
+		// 	 if ok, add this pk to my certs
+		// verify signature
+	}
 }
 
 impl Group {

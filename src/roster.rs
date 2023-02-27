@@ -10,6 +10,10 @@ pub struct Roster {
 	members: BTreeMap<Id, Member>,
 }
 
+pub enum Error {
+	AlreadyExists,
+}
+
 impl Roster {
 	pub fn new() -> Self {
 		Self {
@@ -17,15 +21,25 @@ impl Roster {
 		}
 	}
 
-	pub fn add(&mut self, member: Member) {
-		self.members.insert(member.id, member);
+	pub fn add(&mut self, member: Member) -> Result<(), Error> {
+		self.members
+			.insert(member.id, member)
+			.map_or(Ok(()), |_| Err(Error::AlreadyExists))
+	}
+
+	pub fn contains(&self, id: &Id) -> bool {
+		self.members.contains_key(id)
+	}
+
+	pub fn get(&self, id: &Id) -> Option<&Member> {
+		self.members.get(id)
 	}
 }
 
 impl From<Member> for Roster {
 	fn from(member: Member) -> Self {
 		let mut r = Roster::new();
-		r.add(member);
+		_ = r.add(member);
 
 		r
 	}
@@ -57,10 +71,39 @@ mod tests {
 	};
 
 	#[test]
-	fn test_hash() {
-		let mut r1 = Roster::new();
+	fn test_add() {
+		let mut roster = Roster::new();
 
-		r1.add(Member::new(
+		assert!(roster
+			.add(Member::new(
+				Id([12u8; 32]),
+				KeyPackage {
+					ek: [34u8; 768],
+					svk: PublicKey::new([56u8; 2592]),
+					signature: Signature::new([78u8; 4595]),
+				},
+			))
+			.is_ok());
+
+		assert!(roster
+			.add(Member::new(
+				Id([12u8; 32]),
+				KeyPackage {
+					ek: [56u8; 768],
+					svk: PublicKey::new([78u8; 2592]),
+					signature: Signature::new([90u8; 4595]),
+				},
+			))
+			.is_err());
+	}
+
+	#[test]
+	fn test_contains() {
+		let mut roster = Roster::new();
+
+		assert!(!roster.contains(&Id([12u8; 32])));
+
+		_ = roster.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
 				ek: [34u8; 768],
@@ -69,7 +112,36 @@ mod tests {
 			},
 		));
 
-		r1.add(Member::new(
+		assert!(roster.contains(&Id([12u8; 32])));
+		assert!(!roster.contains(&Id([34u8; 32])));
+
+		_ = roster.add(Member::new(
+			Id([34u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
+
+		assert!(roster.contains(&Id([34u8; 32])));
+		assert!(!roster.contains(&Id([45u8; 32])));
+	}
+
+	#[test]
+	fn test_hash() {
+		let mut r1 = Roster::new();
+
+		_ = r1.add(Member::new(
+			Id([12u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
+
+		_ = r1.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
 				ek: [56u8; 768],
@@ -80,7 +152,7 @@ mod tests {
 
 		let mut r2 = Roster::new();
 
-		r2.add(Member::new(
+		_ = r2.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
 				ek: [56u8; 768],
@@ -89,7 +161,7 @@ mod tests {
 			},
 		));
 
-		r2.add(Member::new(
+		_ = r2.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
 				ek: [34u8; 768],
