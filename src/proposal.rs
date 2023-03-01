@@ -1,26 +1,41 @@
-use crate::{key_package::KeyPackage, member::Id};
+use crate::{dilithium::Signature, hash::Hash, hmac::Digest, key_package::KeyPackage, member::Id};
 
 // TODO: serialize in order to be framed
 pub enum Proposal {
 	Add { id: Id, kp: KeyPackage },
 	Remove { id: Id },
-	Update { kp: KeyPackage }, // id as well?
+	Update { kp: KeyPackage }, // id as well? TODO: introduce `proactive` updates to consume other people's prekeys
 }
 
 pub struct FramedProposal {
-	// GroupId          []byte
-	// Epoch            uint
-	// InterimTransHash []byte // do I need to check it in unframe_commit actually? sig & tag are checled anyway; maybe include conf_trans_hash instead and check if it's derived properly?
-	// Id               string // sender id
-	// P                Proposal
-	// Sig              []byte
-	// MembTag          []byte
+	pub guid: Hash,
+	pub epoch: u64,
+	pub interim_trans_hash: Hash,
+	pub sender: Id,
+	pub prop: Proposal,
+	pub sig: Signature, // signed with ssk (not updated upon rekey currently)
+	pub mac: Digest,
 }
 
 impl FramedProposal {
-	pub fn new(p: Proposal) -> Self {
-		// TODO: implement
-		Self {}
+	pub fn new(
+		guid: Hash,
+		epoch: u64,
+		interim_trans_hash: Hash,
+		sender: Id,
+		prop: Proposal,
+		sig: Signature,
+		mac: Digest,
+	) -> Self {
+		Self {
+			guid,
+			epoch,
+			interim_trans_hash,
+			sender,
+			prop,
+			sig,
+			mac,
+		}
 	}
 
 	pub fn id(&self) -> Id {
@@ -37,5 +52,13 @@ impl FramedProposal {
 		// )
 
 		todo!()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn tedst_id() {
+		// TODO: implement
 	}
 }

@@ -1,5 +1,6 @@
 use crate::dilithium;
 
+#[derive(Clone)]
 pub struct PendingUpdate {
 	dk: ilum::SecretKey,
 	ssk: dilithium::PrivateKey,

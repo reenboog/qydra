@@ -7,7 +7,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct KeyPackage {
-	// do I need to pack this with id as well?
+	// TODO: do I need to pack this with id as well?
 	pub ek: ilum::PublicKey,
 	pub svk: dilithium::PublicKey,
 	pub signature: dilithium::Signature,

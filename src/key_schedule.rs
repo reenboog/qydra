@@ -7,14 +7,16 @@ use crate::hkdf;
 // FIXME: wrap with structs to prevent type coersion
 
 // these are ephemeral and used on the fly
-pub type JoinerSecret = [u8; hash::SIZE];
+pub type JoinerSecret = [u8; hash::SIZE]; // fed into the key schedule; everything is derived from it
 pub type ConfirmationSecret = [u8; hash::SIZE];
+pub type CommitSecret = [u8; hash::SIZE]; // sent to existing users; later applied to old.init to derive new.joiner
 
 // these should be persisted per epoch
 pub type InitSecret = [u8; hash::SIZE];
 pub type AppSecret = [u8; hash::SIZE];
 pub type MacSecret = [u8; hash::SIZE];
 
+#[derive(Clone)]
 pub struct EpochSecrets {
 	init: InitSecret,
 	app: AppSecret,

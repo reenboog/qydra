@@ -5,8 +5,8 @@ use rand::Rng;
 
 use crate::commit::PendingCommit;
 use crate::hash::{self, Hash, Hashable};
-use crate::key_package::{self, KeyPackage};
-use crate::key_schedule::EpochSecrets;
+use crate::key_package::KeyPackage;
+use crate::key_schedule::{CommitSecret, EpochSecrets};
 use crate::member::{Id, Member};
 use crate::proposal::{FramedProposal, Proposal};
 use crate::roster::Roster;
@@ -14,7 +14,15 @@ use crate::update::PendingUpdate;
 use crate::{dilithium, hmac, key_schedule};
 use sha2::{Digest, Sha256};
 
+pub enum Error {
+	WrongEpoch,
+	InvalidSignature,
+	InvalidMac,
+	InvalidInterimHash,
+}
+
 // group state
+#[derive(Clone)]
 pub struct Group {
 	uid: Hash, // TODO: introduce a type?
 	epoch: u64,
@@ -89,6 +97,16 @@ impl Group {
 		}
 	}
 
+	fn next(&self) -> Group {
+		let mut new_group = self.clone();
+
+		new_group.epoch += 1;
+		new_group.pending_updates = HashMap::new();
+		new_group.pending_commits = HashMap::new();
+
+		new_group
+	}
+
 	// group/epoch_header?
 	fn ctx(&self) -> Hash {
 		Self::derive_ctx(
@@ -133,9 +151,13 @@ impl Group {
 		// TODO: apply current epoch and other state
 	}
 
+	// returns (user_id, Proposal)
+	fn unframe_proposal(&self, fp: &FramedProposal) -> Result<(Id, Proposal), Error> {
+		todo!()
+	}
+
 	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey) {
 		// TODO: update signing key as well
-
 		let kp = ilum::gen_keypair(&self.seed);
 		let package = KeyPackage::new(
 			&kp.pk,
@@ -157,12 +179,82 @@ impl Group {
 	// 	)
 	// }
 
+	// TODO: return a new group state instead of using mut?
+	// apply proposals: get the new state + diffs + filter bad proposals
+	// sti, [std], wi, [wd]
+	// this proposals should probably be filtered/validated by an extrnal entity to check access rules as well
+	pub fn commit(&self, fps: &[FramedProposal]) {
+		// at this point, shall we consider this diff as valid only?
+		let (mut new, diff) = self.aply_proposals(fps);
+		let to_welcome = diff.added;
+		let to_notify = new
+			.roster
+			.ids()
+			.into_iter()
+			.filter(|id| !to_welcome.contains(id))
+			.collect::<Vec<Id>>();
+
+		// let (com_secret, com_kp) = self.rekey(&to_notify);
+	}
+
+	// cti and [ctd]
+	fn rekey(&self, receivers: &[Id]) -> (CommitSecret, KeyPackage, ilum::Cti, Vec<ilum::Ctd>) {
+		//
+		todo!()
+	}
+
+	// filters bad proposals, generates a new state { epoch + 1, roster, roster_hash }, returns ordered, validated diff
+	fn aply_proposals(&self, fps: &[FramedProposal]) -> (Group, Diff) {
+		let mut new = self.next();
+		// updates, removes, adds
+		// FIXME: add these checks?
+		// in the spec:
+		// 1 assert(!changes.removes.contains(self.user_id)) // can't remove myself
+		// 2 assert(!changes.updates.contans(self.user_id))  // can't update myself – it should be oka ctually
+		fps.into_iter().for_each(|fp| {
+			// TODO: implement
+			match fp.prop {
+				Proposal::Add { id, ref kp } => todo!(),
+				Proposal::Remove { id } => todo!(),
+				Proposal::Update { ref kp } => todo!(),
+			};
+		});
+
+		// (new, diff)
+		todo!()
+	}
+
 	fn verify_kp(id: &Id, kp: &KeyPackage) {
 		// id == pk.id
 		// if I don't have kp in my certs
 		// send a VERIFY req to the backend: // almost TOFU
 		// 	 if ok, add this pk to my certs
 		// verify signature
+	}
+}
+
+// struct Delta {
+// 	// it is possible to process someone else's proposals, so sender is required
+// 	sender: Id,
+// 	proposal: Proposal,
+// }
+
+// A properly ordered, validated set of proposals
+struct Diff {
+	updated: Vec<Id>,
+	removed: Vec<Id>,
+	added: Vec<Id>, // a sender can propose any number of Deltas
+	                // a receiver can have one Deltas
+}
+
+impl Diff {
+	pub fn is_removed(&self, id: &Id) -> bool {
+		// self.removes.iter().any(|d| d.proposal)
+		todo!()
+	}
+
+	pub fn is_added(&self, id: &Id) -> bool {
+		todo!()
 	}
 }
 
@@ -195,6 +287,18 @@ impl Group {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn test_next() {
+		// pend_upd = []
+		// pend_com = [
+		// epoch = epoch + 1
+	}
+
+	#[test]
+	fn test_apply_proposals() {
+		// test good proposals
+		// test bad proposals
+	}
 
 	#[test]
 	fn test_create_group() {

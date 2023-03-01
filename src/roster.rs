@@ -5,6 +5,7 @@ use crate::{
 	member::{Id, Member},
 };
 
+#[derive(Clone)]
 pub struct Roster {
 	// order is important, hence BTreeMap instead of HashMap
 	members: BTreeMap<Id, Member>,
@@ -33,6 +34,10 @@ impl Roster {
 
 	pub fn get(&self, id: &Id) -> Option<&Member> {
 		self.members.get(id)
+	}
+
+	pub fn ids(&self) -> Vec<Id> {
+		self.members.keys().map(|k| *k).collect()
 	}
 }
 
