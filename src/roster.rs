@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
 	hash::{Hash, Hashable},
+	key_package::KeyPackage,
 	member::{Id, Member},
 };
 
@@ -34,6 +35,12 @@ impl Roster {
 
 	pub fn get(&self, id: &Id) -> Option<&Member> {
 		self.members.get(id)
+	}
+
+	// sets kp for id and returns prev_kp, if any, or nil
+	pub fn set(&mut self, id: &Id, kp: &KeyPackage) -> Option<Member> {
+		self.members
+			.insert(id.clone(), Member::new(id.clone(), kp.clone()))
 	}
 
 	pub fn ids(&self) -> Vec<Id> {
@@ -103,6 +110,16 @@ mod tests {
 	}
 
 	#[test]
+	fn test_get() {
+		//
+	}
+
+	#[test]
+	fn test_set() {
+		//
+	}
+
+	#[test]
 	fn test_contains() {
 		let mut roster = Roster::new();
 
@@ -137,6 +154,7 @@ mod tests {
 	fn test_hash() {
 		let mut r1 = Roster::new();
 
+		// add two elements with keys 12 and 34 to r1
 		_ = r1.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
@@ -157,6 +175,7 @@ mod tests {
 
 		let mut r2 = Roster::new();
 
+		// add two elements with keys 23 and 12 to r2
 		_ = r2.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
@@ -175,7 +194,7 @@ mod tests {
 			},
 		));
 
-		// ensure sorting
+		// ensure sorting is respected when hashing
 		assert_eq!(r1.hash(), r2.hash());
 
 		// and non-zeroes

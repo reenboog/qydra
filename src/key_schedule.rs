@@ -18,17 +18,17 @@ pub type MacSecret = [u8; hash::SIZE];
 
 #[derive(Clone)]
 pub struct EpochSecrets {
-	init: InitSecret,
-	app: AppSecret,
-	mac: MacSecret,
+	pub init: InitSecret,
+	pub app: AppSecret,
+	pub mac: MacSecret,
 }
 
 // TODO: introduce a type for tcx?
 pub fn derive_epoch_secrets(
 	ctx: hash::Hash,
-	joiner_secret: JoinerSecret,
+	joiner_secret: &JoinerSecret,
 ) -> (EpochSecrets, ConfirmationSecret) {
-	let digest = Sha256::digest([ctx, joiner_secret].concat());
+	let digest = Sha256::digest([ctx.as_slice(), joiner_secret].concat());
 
 	// TODO: introduce SIZE for each subkey?
 	let init = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"init_secret");
@@ -37,6 +37,14 @@ pub fn derive_epoch_secrets(
 	let conf = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"conf_secret");
 
 	(EpochSecrets { init, app, mac }, conf)
+}
+
+pub fn derive_joiner(init_secret: &InitSecret, commit_secret: &CommitSecret) -> JoinerSecret {
+	let digest = Sha256::digest([init_secret.as_slice(), commit_secret].concat());
+
+	hkdf::Hkdf::from_ikm(&digest)
+		.expand::<{ hash::SIZE }>(b"joiner_secret")
+		.into()
 }
 
 #[cfg(test)]

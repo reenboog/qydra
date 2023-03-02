@@ -1,4 +1,10 @@
-use crate::{dilithium::Signature, hash::Hash, hmac::Digest, key_package::KeyPackage, member::Id};
+use crate::{
+	dilithium::Signature,
+	hash::{Hash, Hashable},
+	hmac::Digest,
+	key_package::KeyPackage,
+	member::Id,
+};
 
 // TODO: serialize in order to be framed
 pub enum Proposal {
@@ -7,10 +13,24 @@ pub enum Proposal {
 	Update { kp: KeyPackage }, // id as well? TODO: introduce `proactive` updates to consume other people's prekeys
 }
 
+impl Hashable for Proposal {
+	fn hash(&self) -> Hash {
+		use sha2::{Digest, Sha256};
+
+		let bytes = match self {
+			Proposal::Add { id, kp } => [id.as_bytes().as_slice(), &kp.hash()].concat(),
+			Proposal::Remove { id } => id.as_bytes().to_vec(),
+			Proposal::Update { kp } => kp.hash().to_vec(),
+		};
+
+		Sha256::digest(bytes).into()
+	}
+}
+
 pub struct FramedProposal {
 	pub guid: Hash,
 	pub epoch: u64,
-	pub interim_trans_hash: Hash,
+	pub interim_trans_hash: Hash, // why do I need this here? do I validate it somewhere?
 	pub sender: Id,
 	pub prop: Proposal,
 	pub sig: Signature, // signed with ssk (not updated upon rekey currently)
@@ -39,19 +59,21 @@ impl FramedProposal {
 	}
 
 	pub fn id(&self) -> Id {
-		// return hashPack(
-		// 	pad,
-		// 	PropIdHashId,
-		// 	fp.GroupId,
-		// 	packUint(fp.Epoch),
-		// 	fp.InterimTransHash,
-		// 	[]byte(fp.Id),
-		// 	fp.P.Pack(pad),
-		// 	fp.Sig,
-		// 	fp.MembTag,
-		// )
+		use sha2::{Digest, Sha256};
 
-		todo!()
+		Id(Sha256::digest(
+			[
+				&self.guid,
+				self.epoch.to_be_bytes().as_slice(),
+				&self.interim_trans_hash,
+				self.sender.as_bytes(),
+				&self.prop.hash(),
+				self.sig.as_bytes(),
+				self.mac.as_bytes(),
+			]
+			.concat(),
+		)
+		.into())
 	}
 }
 
@@ -60,5 +82,11 @@ mod tests {
 	#[test]
 	fn tedst_id() {
 		// TODO: implement
+	}
+
+	#[test]
+	fn test_hash_proposal() {
+		// TODO: implement
+		// compare same and different cases
 	}
 }

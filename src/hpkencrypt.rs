@@ -66,6 +66,11 @@ mod tests {
 	use super::{decrypt, encrypt, Error};
 
 	#[test]
+	fn test_encrypt_to_no_keys() {
+		// TODO: implement
+	}
+
+	#[test]
 	fn encrypt_decrypt() {
 		let seed = [123u8; 16];
 		let kps = (0..5)

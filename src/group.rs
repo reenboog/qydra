@@ -1,17 +1,22 @@
 use std::collections::HashMap;
+use std::ops::Index;
 
 use ilum::*;
 use rand::Rng;
 
-use crate::commit::PendingCommit;
+use crate::commit::{Commit, FramedCommit, PendingCommit};
+use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
 use crate::key_package::KeyPackage;
-use crate::key_schedule::{CommitSecret, EpochSecrets};
+use crate::key_schedule::{
+	CommitSecret, ConfirmationSecret, EpochSecrets, InitSecret, JoinerSecret,
+};
 use crate::member::{Id, Member};
 use crate::proposal::{FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
-use crate::{dilithium, hmac, key_schedule};
+use crate::welcome::{WelcomeI, WelcomeD};
+use crate::{dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 pub enum Error {
@@ -69,8 +74,8 @@ impl Group {
 		let joiner_secret = rand::thread_rng().gen();
 		let conf_trans_hash = hash::empty();
 		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash, &[]);
-		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, joiner_secret);
-		let conf_tag = hmac::digest(&hmac::Key::from(&conf_key), &conf_trans_hash);
+		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner_secret);
+		let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
 		let interim_trans_hash = Self::interim_trans_hash(&conf_trans_hash, conf_tag.as_bytes());
 
 		Self {
@@ -181,36 +186,183 @@ impl Group {
 
 	// TODO: return a new group state instead of using mut?
 	// apply proposals: get the new state + diffs + filter bad proposals
-	// sti, [std], wi, [wd]
-	// this proposals should probably be filtered/validated by an extrnal entity to check access rules as well
+	// these should be filtered/validated and ordered by an outer layer
 	pub fn commit(&self, fps: &[FramedProposal]) {
-		// at this point, shall we consider this diff as valid only?
+		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
 		let (mut new, diff) = self.aply_proposals(fps);
+
+		// by the spec, I am to check these:
+		// 1 assert(!changes.removes.contains(self.user_id))
+		// 2 assert(!changes.updates.contans(self.user_id))
+		// but I should actually check it all at a higher level
+		// plus, it's fine committing my own update actually
+
+		// these will get Welcome
 		let to_welcome = diff.added;
+		// these will get Commit
+		// TODO: move to Roster and test
 		let to_notify = new
 			.roster
 			.ids()
 			.into_iter()
 			.filter(|id| !to_welcome.contains(id))
-			.collect::<Vec<Id>>();
+			.map(|id| new.roster.get(&id).unwrap().clone())
+			.collect::<Vec<Member>>();
 
-		// let (com_secret, com_kp) = self.rekey(&to_notify);
+		let (com_secret, com_kp, encryption) = new.rekey(&to_notify);
+
+		// member_hash is automatically derived at this point
+		// a shared commit part that is to be signed; will be sent to ids_to_notify
+		let commit = Commit {
+			kp: com_kp,
+			cti: encryption.cti,
+			iv: encryption.iv,
+			sym_ct: encryption.sym_ct,
+			// this commit will include all the given proposal ids
+			prop_ids: fps.iter().map(|fp| fp.id()).collect(),
+		};
+
+		// sign commit
+		let sig = self.sign_commit(&commit);
+		new.conf_trans_hash = self.derive_conf_trans_hash(&self.user_id, &commit, &sig);
+
+		let (joiner, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
+		new.secrets = epoch_secrets;
+
+		let conf_tag = Self::conf_tag(&conf_key, &new.conf_trans_hash);
+		new.interim_trans_hash =
+			Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
+
+		let framed_commit = self.frame_commit(&commit, &sig, &conf_tag);
+		let ctds = self
+			.roster
+			.ids()
+			.iter()
+			.map(|id| {
+				// to_notify can either be the same as self.roster or 'shorter', eg
+				// r: [a, b, c, d, e]
+				// n: [a, c, e]
+				// in either case, keys never change, plus, to_notify is as ordered as encryption.ctds
+				// TODO: make such bond stronger
+				if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
+					Some((id.clone(), encryption.ctds[idx]))
+				} else {
+					None
+				}
+			})
+			.collect::<Vec<Option<(Id, Ctd)>>>();
+
+		// add welcomes
+		// assing pend_com
+		// return (framed_commit, (node_id, ctd), wi, (node_id, wd))
 	}
 
-	// cti and [ctd]
-	fn rekey(&self, receivers: &[Id]) -> (CommitSecret, KeyPackage, ilum::Cti, Vec<ilum::Ctd>) {
-		//
+	fn welcome(&self, invited: &[Member], joiner_secret: &JoinerSecret, conf_tag: &hmac::Digest) -> (WelcomeI, Vec<WelcomeD>) {
 		todo!()
 	}
 
-	// filters bad proposals, generates a new state { epoch + 1, roster, roster_hash }, returns ordered, validated diff
+	fn derive_secrets(
+		&self,
+		prev_state: &Group,
+		commit_secret: &CommitSecret,
+	) -> (JoinerSecret, EpochSecrets, ConfirmationSecret) {
+		let joiner = key_schedule::derive_joiner(&prev_state.secrets.init, &commit_secret);
+		let (epoch_secrets, conf_key) = key_schedule::derive_epoch_secrets(self.ctx(), &joiner);
+
+		(joiner, epoch_secrets, conf_key)
+	}
+
+	// should return 2 hashes: wo_cmtr & w_cmtr or one is enough?
+	fn derive_conf_trans_hash(&self, committer: &Id, commit: &Commit, sig: &Signature) -> Hash {
+		// OLD guid, OLD, epoch, OLD interim!
+		// comCont ← (G.groupid, G.epoch, ‘commit’, 𝐶0, sig)
+		// G′.confTransHash-w.o-‘idc’ ← H(G.interimTransHash, comCont)
+		// G′.confTransHash ← H(G′.confTransHash-w.o-‘idc’, id𝑐 )
+		// return G'
+
+		// gs.ConfTransHash = hashPack(
+		// 	pad,
+		// 	ConfTransHashId,
+		// 	old.InterimTransHash, // what's its initial value? all zeros? already contains epoch from derive_epoch_keys
+		// 	old.GroupId,
+		// 	packUint(old.Epoch),
+		// 	[]byte(idC),
+		// 	[]byte("commit"),
+		// 	C0.Pack(pad),
+		// 	sig,
+		// )
+
+		todo!()
+	}
+
+	fn sign_commit(&self, commit: &Commit) -> Signature {
+		// 1: comCont ← (G.groupCont(), G.id, ‘commit’,𝐶0)
+		// 2: sig ← SIG.Sign(ppSIG, G.ssk, comCont)
+		// 3: return sig
+
+		// groupContWInterim := gs.GroupContWInterim() // does this authenticate anything?
+
+		// packedC := c.Pack(pad) // TODO: use hash_pack instead
+		// comCont := hashPack(
+		// 	pad,
+		// 	CommitSignId,
+		// 	groupContWInterim,
+		// 	[]byte(gs.Id), // sender
+		// 	[]byte("commit"),
+		// 	packedC,
+		// )
+		// sig, err := gs.Ssk.Sign(
+		// 	nil,
+		// 	comCont,
+		// 	crypto.Hash(0),
+		// )
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// return sig
+		todo!()
+	}
+
+	fn frame_commit(
+		&self,
+		commit: &Commit,
+		sig: &Signature,
+		conf_tag: &hmac::Digest,
+	) -> FramedCommit {
+		todo!()
+	}
+
+	// TODO: return (com, kp, enc) and apply instead of state change?
+	fn rekey(
+		&mut self,
+		receivers: &[Member],
+	) -> (CommitSecret, KeyPackage, hpkencrypt::Encryption) {
+		let com_secret = rand::thread_rng().gen::<CommitSecret>();
+		let (kp, sk) = self.gen_kp();
+
+		// TODO: update ssk/svk as well; should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
+		_ = self.roster.set(&self.user_id, &kp);
+		self.dk = sk;
+
+		let keys = receivers
+			.iter()
+			.map(|m| m.kp.ek.clone())
+			.collect::<Vec<ilum::PublicKey>>();
+		// encrypt com_secret for all recipients including myself (though I'll ignore it when processing)
+		let encryption = hpkencrypt::encrypt(&com_secret, &self.seed, &keys);
+
+		(com_secret, kp, encryption)
+	}
+
+	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
+	// TODO: introduce a dedicated type instead of [FramedProposal]
 	fn aply_proposals(&self, fps: &[FramedProposal]) -> (Group, Diff) {
 		let mut new = self.next();
 		// updates, removes, adds
 		// FIXME: add these checks?
 		// in the spec:
-		// 1 assert(!changes.removes.contains(self.user_id)) // can't remove myself
-		// 2 assert(!changes.updates.contans(self.user_id))  // can't update myself – it should be oka ctually
+
+		// TODO: rather apply props and don't do anything – they should be already validated
 		fps.into_iter().for_each(|fp| {
 			// TODO: implement
 			match fp.prop {
@@ -244,24 +396,17 @@ struct Diff {
 	updated: Vec<Id>,
 	removed: Vec<Id>,
 	added: Vec<Id>, // a sender can propose any number of Deltas
-	                // a receiver can have one Deltas
-}
-
-impl Diff {
-	pub fn is_removed(&self, id: &Id) -> bool {
-		// self.removes.iter().any(|d| d.proposal)
-		todo!()
-	}
-
-	pub fn is_added(&self, id: &Id) -> bool {
-		todo!()
-	}
+	                // a receiver can have one Delta
 }
 
 impl Group {
 	// TODO: move somewhere else; introduce dedicated types for hashes
 	fn interim_trans_hash(conf_trans_hash: &Hash, conf_tag: &Hash) -> Hash {
 		Sha256::digest([conf_trans_hash.as_slice(), conf_tag].concat()).into()
+	}
+
+	fn conf_tag(conf_key: &Hash, conf_trans_hash: &Hash) -> hmac::Digest {
+		hmac::digest(&hmac::Key::from(conf_key), conf_trans_hash)
 	}
 
 	fn derive_ctx(
@@ -302,6 +447,16 @@ mod tests {
 
 	#[test]
 	fn test_create_group() {
+		// TODO: implement
+	}
+
+	#[test]
+	fn test_rekey() {
+		// TODO: implement
+	}
+
+	#[test]
+	fn test_derive_conf_trans_hash() {
 		// TODO: implement
 	}
 }
