@@ -27,4 +27,5 @@ impl Hashable for Commit {
 // I already have types for Cti & Ctd, but sym enc is now required (Cti)
 pub struct FramedCommit {
 	//
+	// 1 : return (G.groupid, G.epoch, G.id, ‘commit’,𝐶0, sig, confTag)
 }

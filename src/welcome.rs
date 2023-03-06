@@ -1,8 +1,15 @@
+pub struct WelcomeI {}
 
-pub struct WelcomeI {
+pub struct WelcomeD {}
 
-}
+// should be encrypted with the recipient's public key at least
+// type WelcomeMessageI struct {
+// 	GroupInfo *GroupInfo
+// 	T         []byte
+// 	Sig       []byte
+// }
 
-pub struct WelcomeD {
-
-}
+// type WelcomeMessageD struct {
+// 	KpHash []byte
+// 	Ctd    []byte
+// }

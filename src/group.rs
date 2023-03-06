@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::Index;
 
 use ilum::*;
 use rand::Rng;
@@ -8,22 +7,21 @@ use crate::commit::{Commit, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
 use crate::key_package::KeyPackage;
-use crate::key_schedule::{
-	CommitSecret, ConfirmationSecret, EpochSecrets, InitSecret, JoinerSecret,
-};
+use crate::key_schedule::{CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret};
 use crate::member::{Id, Member};
-use crate::proposal::{FramedProposal, Proposal};
+use crate::proposal::{self, FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
-use crate::welcome::{WelcomeI, WelcomeD};
+use crate::welcome::{WelcomeD, WelcomeI};
 use crate::{dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 pub enum Error {
+	WrongGroup,
 	WrongEpoch,
+	UnknownSender,
 	InvalidSignature,
 	InvalidMac,
-	InvalidInterimHash,
 }
 
 // group state
@@ -36,8 +34,7 @@ pub struct Group {
 	seed: ilum::Seed,
 
 	conf_trans_hash: Hash,
-	conf_trans_hash_without_committer: Hash,
-	interim_trans_hash: Hash,
+	interim_trans_hash: Hash, // trans_tag could be stored instead to derive interim_hash on the fly
 
 	roster: Roster,
 
@@ -73,7 +70,7 @@ impl Group {
 		let epoch = 0;
 		let joiner_secret = rand::thread_rng().gen();
 		let conf_trans_hash = hash::empty();
-		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash, &[]);
+		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash);
 		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner_secret);
 		let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
 		let interim_trans_hash = Self::interim_trans_hash(&conf_trans_hash, conf_tag.as_bytes());
@@ -85,7 +82,6 @@ impl Group {
 
 			// ledger?
 			conf_trans_hash,
-			conf_trans_hash_without_committer: conf_trans_hash.clone(),
 			interim_trans_hash,
 
 			roster,
@@ -112,15 +108,8 @@ impl Group {
 		new_group
 	}
 
-	// group/epoch_header?
 	fn ctx(&self) -> Hash {
-		Self::derive_ctx(
-			&self.uid,
-			self.epoch,
-			&self.roster,
-			&self.conf_trans_hash,
-			&[],
-		)
+		Self::derive_ctx(&self.uid, self.epoch, &self.roster, &self.conf_trans_hash)
 	}
 
 	// TODO: this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
@@ -149,16 +138,61 @@ impl Group {
 		fp
 	}
 
+	// means: "This proposal is signed by *ME* from the *GROUP* that has *STATE*"
 	fn frame_proposal(&self, proposal: Proposal) -> FramedProposal {
-		// sig = sign(proposal)
-		// tag = mac(proposal + sig)
-		todo!()
-		// TODO: apply current epoch and other state
+		let to_sign = Sha256::digest(
+			[
+				self.ctx().as_slice(),
+				self.user_id.as_bytes(),
+				&proposal.hash(),
+			]
+			.concat(),
+		);
+
+		let sig = self.ssk.sign(&to_sign);
+		let to_mac = Sha256::digest([to_sign.as_slice(), sig.as_bytes()].concat());
+		let mac_nonce = proposal::Nonce(rand::thread_rng().gen());
+		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce);
+		let mac = hmac::digest(&mac_key, &to_mac);
+
+		FramedProposal::new(self.uid, self.epoch, self.user_id, proposal, sig, mac, mac_nonce)
 	}
 
 	// returns (user_id, Proposal)
 	fn unframe_proposal(&self, fp: &FramedProposal) -> Result<(Id, Proposal), Error> {
-		todo!()
+		if fp.guid != self.uid {
+			return Err(Error::WrongGroup);
+		}
+
+		if fp.epoch != self.epoch {
+			return Err(Error::WrongEpoch);
+		}
+
+		if let Some(sender) = self.roster.get(&fp.sender) {
+			let to_sign = Sha256::digest(
+				[
+					self.ctx().as_slice(),
+					fp.sender.as_bytes(),
+					&fp.prop.hash(),
+				]
+				.concat(),
+			);
+
+			if !sender.kp.svk.verify(&to_sign, &fp.sig) {
+				return Err(Error::InvalidSignature);
+			}
+
+			let to_mac = Sha256::digest([to_sign.as_slice(), fp.sig.as_bytes()].concat());
+			let mac_key = Self::mac_key(&self.secrets.mac, &fp.sender, &fp.nonce);
+
+			if !hmac::verify(&to_mac, &mac_key, &fp.mac) {
+				return Err(Error::InvalidMac);
+			}
+
+			return Ok((fp.sender, fp.prop.clone()))
+		} else {
+			return Err(Error::UnknownSender);
+		}
 	}
 
 	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey) {
@@ -172,17 +206,6 @@ impl Group {
 
 		(package, kp.sk)
 	}
-
-	// used for signing commits and proposals when packing only; do I need it at all?
-	// fn ctx_w_interim(&self) -> Hash {
-	// 	Self::derive_ctx(
-	// 		&self.uid,
-	// 		self.epoch,
-	// 		&self.roster,
-	// 		&self.conf_trans_hash,
-	// 		&self.interim_trans_hash,
-	// 	)
-	// }
 
 	// TODO: return a new group state instead of using mut?
 	// apply proposals: get the new state + diffs + filter bad proposals
@@ -233,6 +256,7 @@ impl Group {
 		new.interim_trans_hash =
 			Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
 
+		// TODO: if I allow updating my own keys, will I be able to unframe/verify? – rather yes, since the new state is not applied (see PendingCommit)
 		let framed_commit = self.frame_commit(&commit, &sig, &conf_tag);
 		let ctds = self
 			.roster
@@ -257,7 +281,12 @@ impl Group {
 		// return (framed_commit, (node_id, ctd), wi, (node_id, wd))
 	}
 
-	fn welcome(&self, invited: &[Member], joiner_secret: &JoinerSecret, conf_tag: &hmac::Digest) -> (WelcomeI, Vec<WelcomeD>) {
+	fn welcome(
+		&self,
+		invited: &[Member],
+		joiner_secret: &JoinerSecret,
+		conf_tag: &hmac::Digest,
+	) -> (WelcomeI, Vec<WelcomeD>) {
 		todo!()
 	}
 
@@ -295,6 +324,8 @@ impl Group {
 		todo!()
 	}
 
+	// means: "This commit is signed by *ME* from the *GROUP* that has *STATE*"
+	// hence, groupCont() should contain all shared (non derivable) state (its hash)
 	fn sign_commit(&self, commit: &Commit) -> Signature {
 		// 1: comCont ← (G.groupCont(), G.id, ‘commit’,𝐶0)
 		// 2: sig ← SIG.Sign(ppSIG, G.ssk, comCont)
@@ -409,20 +440,25 @@ impl Group {
 		hmac::digest(&hmac::Key::from(conf_key), conf_trans_hash)
 	}
 
-	fn derive_ctx(
-		uid: &[u8],
-		epoch: u64,
-		roster: &Roster,
-		conf_trans_hash: &[u8],
-		interim_trans_hash: &[u8],
-	) -> Hash {
+	fn mac_key(seed: &MacSecret, user_id: &Id, nonce: &proposal::Nonce) -> hmac::Key {
+		hmac::Key::new(Sha256::digest(
+			[
+				seed.as_slice(),
+				user_id.as_bytes(),
+				&nonce.0,
+			]
+			.concat(),
+		)
+		.into())
+	}
+
+	fn derive_ctx(uid: &[u8], epoch: u64, roster: &Roster, conf_trans_hash: &[u8]) -> Hash {
 		Sha256::digest(
 			[
 				uid,
 				epoch.to_be_bytes().as_slice(),
 				&roster.hash(),
 				conf_trans_hash,
-				interim_trans_hash,
 			]
 			.concat(),
 		)
@@ -437,6 +473,11 @@ mod tests {
 		// pend_upd = []
 		// pend_com = [
 		// epoch = epoch + 1
+	}
+
+	#[test]
+	fn test_frame_unframe_proposal() {
+
 	}
 
 	#[test]

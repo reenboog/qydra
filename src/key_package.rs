@@ -49,7 +49,7 @@ pub fn sign(
 pub fn verify(ek: &ilum::PublicKey, svk: &dilithium::PublicKey, sig: &Signature) -> bool {
 	let bytes = Sha256::digest(pack(ek, svk));
 
-	svk.verify(&bytes)
+	svk.verify(&bytes, sig)
 }
 
 fn pack(ek: &ilum::PublicKey, svk: &dilithium::PublicKey) -> Vec<u8> {

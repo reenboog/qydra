@@ -39,7 +39,7 @@ impl PublicKey {
 }
 
 impl PublicKey {
-	pub fn verify(&self, msg: &[u8]) -> bool {
+	pub fn verify(&self, msg: &[u8], sig: &Signature) -> bool {
 		// TODO: implement
 		todo!()
 	}
