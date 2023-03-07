@@ -350,27 +350,18 @@ impl Group {
 		(joiner, epoch_secrets, conf_key)
 	}
 
-	// should return 2 hashes: wo_cmtr & w_cmtr or one is enough?
 	fn derive_conf_trans_hash(&self, committer: &Id, commit: &Commit, sig: &Signature) -> Hash {
-		// OLD guid, OLD, epoch, OLD interim!
-		// comCont ← (G.groupid, G.epoch, ‘commit’, 𝐶0, sig)
-		// G′.confTransHash-w.o-‘idc’ ← H(G.interimTransHash, comCont)
-		// G′.confTransHash ← H(G′.confTransHash-w.o-‘idc’, id𝑐 )
-		// return G'
-
-		// gs.ConfTransHash = hashPack(
-		// 	pad,
-		// 	ConfTransHashId,
-		// 	old.InterimTransHash, // what's its initial value? all zeros? already contains epoch from derive_epoch_keys
-		// 	old.GroupId,
-		// 	packUint(old.Epoch),
-		// 	[]byte(idC),
-		// 	[]byte("commit"),
-		// 	C0.Pack(pad),
-		// 	sig,
-		// )
-
-		todo!()
+		Sha256::digest(
+			[
+				self.uid.as_slice(),
+				&self.epoch.to_be_bytes(),
+				&commit.hash(),
+				sig.as_bytes(),
+				&self.interim_trans_hash,
+				committer.as_bytes(),
+			]
+			.concat(),
+		).into()
 	}
 
 	// means: "This commit is signed by *ME* from the *GROUP* that has *STATE*"
