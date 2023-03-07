@@ -1,7 +1,9 @@
 use crate::{
 	aes_gcm::{self, Aes},
+	hash::Hashable,
 	hkdf,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -11,13 +13,32 @@ pub enum Error {
 
 pub struct Encryption {
 	// key-independent encapsulation
-	pub cti: ilum::Cti,
+	pub cti: CmpdCti,
 	// key-dependent encapsulations
 	pub ctds: Vec<ilum::Ctd>,
+}
+
+// Compound, key-independent ciphertext
+// REVIEW: applies to CmPKEs only
+pub struct CmpdCti {
+	// key-independent encapsulation
+	pub cti: ilum::Cti,
 	// aes iv
 	pub iv: aes_gcm::Iv,
 	// aes ciphertext
 	pub sym_ct: Vec<u8>,
+}
+
+impl CmpdCti {
+	pub fn new(cti: ilum::Cti, iv: aes_gcm::Iv, sym_ct: Vec<u8>) -> Self {
+		Self { cti, iv, sym_ct }
+	}
+}
+
+impl Hashable for CmpdCti {
+	fn hash(&self) -> crate::hash::Hash {
+		Sha256::digest([self.cti.as_slice(), self.iv.as_bytes(), &self.sym_ct].concat()).into()
+	}
 }
 
 const KDF_LABEL: &[u8] = b"hpkencrypt";
@@ -28,6 +49,7 @@ fn aes_expand_key(seed: &[u8]) -> aes_gcm::Key {
 	aes_gcm::Key(aes_key)
 }
 
+// TODO: should expect a mixed PK type, eg CmpdPublicKey or something
 pub fn encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> Encryption {
 	let encapsulated = ilum::enc(seed, keys);
 	let aes_key = aes_expand_key(&encapsulated.ss);
@@ -35,10 +57,8 @@ pub fn encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> Encryp
 	let ct = aes.encrypt(pt);
 
 	Encryption {
-		cti: encapsulated.cti,
+		cti: CmpdCti::new(encapsulated.cti, aes.iv, ct),
 		ctds: encapsulated.ctds,
-		iv: aes.iv,
-		sym_ct: ct,
 	}
 }
 
@@ -86,13 +106,13 @@ mod tests {
 
 		kps.iter().enumerate().for_each(|(idx, kp)| {
 			let r = decrypt(
-				&sealed.sym_ct,
-				&sealed.cti,
+				&sealed.cti.sym_ct,
+				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
 				&kp.pk,
 				&kp.sk,
-				&sealed.iv,
+				&sealed.cti.iv,
 			);
 
 			assert_eq!(r, Ok(msg.to_vec()));
@@ -116,13 +136,13 @@ mod tests {
 		// fails for wrong sk
 		kps.iter().enumerate().for_each(|(idx, kp)| {
 			let r = decrypt(
-				&sealed.sym_ct,
-				&sealed.cti,
+				&sealed.cti.sym_ct,
+				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
 				&kp.pk,
 				&ilum::gen_keypair(&seed).sk,
-				&sealed.iv,
+				&sealed.cti.iv,
 			);
 
 			assert_eq!(r, Err(Error::KeyPairMismatch));
@@ -131,13 +151,13 @@ mod tests {
 		// fails for wrong pk
 		kps.iter().enumerate().for_each(|(idx, kp)| {
 			let r = decrypt(
-				&sealed.sym_ct,
-				&sealed.cti,
+				&sealed.cti.sym_ct,
+				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
 				&ilum::gen_keypair(&seed).pk,
 				&kp.sk,
-				&sealed.iv,
+				&sealed.cti.iv,
 			);
 
 			assert_eq!(r, Err(Error::KeyPairMismatch));
@@ -161,8 +181,8 @@ mod tests {
 		// fails for wrong iv
 		kps.iter().enumerate().for_each(|(idx, kp)| {
 			let r = decrypt(
-				&sealed.sym_ct,
-				&sealed.cti,
+				&sealed.cti.sym_ct,
+				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
 				&kp.pk,

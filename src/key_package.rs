@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use crate::{
 	dilithium::{self, Signature},
 	hash::Hashable,
+	member::Id,
 };
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ pub fn verify(ek: &ilum::PublicKey, svk: &dilithium::PublicKey, sig: &Signature)
 	svk.verify(&bytes, sig)
 }
 
+// TODO: respect ecc keys as well, when introduced
 fn pack(ek: &ilum::PublicKey, svk: &dilithium::PublicKey) -> Vec<u8> {
 	[ek.as_slice(), svk.as_bytes()].concat()
 }
@@ -59,8 +61,22 @@ fn pack(ek: &ilum::PublicKey, svk: &dilithium::PublicKey) -> Vec<u8> {
 impl Hashable for KeyPackage {
 	fn hash(&self) -> crate::hash::Hash {
 		// TODO: do I need user_id here?
-		Sha256::digest([&self.ek[..], self.svk.as_bytes(), self.signature.as_bytes()].concat())
-			.into()
+		// TODO: respect ecc keys as well, when introduced
+		Sha256::digest(
+			[
+				self.ek.as_slice(),
+				self.svk.as_bytes(),
+				self.signature.as_bytes(),
+			]
+			.concat(),
+		)
+		.into()
+	}
+}
+
+impl KeyPackage {
+	pub fn id(&self) -> Id {
+		Id(self.hash())
 	}
 }
 

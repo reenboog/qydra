@@ -14,7 +14,7 @@ use crate::member::{Id, Member};
 use crate::proposal::{self, FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
-use crate::welcome::{WelcomeD, WelcomeI};
+use crate::welcome::{self, WlcmCtd, WlcmCti};
 use crate::{dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
@@ -216,7 +216,14 @@ impl Group {
 	// TODO: return a new group state instead of using mut?
 	// apply proposals: get the new state + diffs + filter bad proposals
 	// these should be filtered/validated and ordered by an outer layer
-	pub fn commit(&mut self, fps: &[FramedProposal]) -> (FramedCommit, Vec<(Id, Option<Ctd>)>, Option<(WelcomeI, Vec<WelcomeD>)>) {
+	pub fn commit(
+		&mut self,
+		fps: &[FramedProposal],
+	) -> (
+		FramedCommit,
+		Vec<(Id, Option<Ctd>)>,
+		Option<(WlcmCti, Vec<WlcmCtd>)>,
+	) {
 		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
 		let (mut new, diff) = self.aply_proposals(fps);
 
@@ -243,8 +250,6 @@ impl Group {
 		let commit = Commit {
 			kp: com_kp,
 			cti: encryption.cti,
-			iv: encryption.iv,
-			sym_ct: encryption.sym_ct,
 			// this commit will include all the given proposal ids
 			prop_ids: fps.iter().map(|fp| fp.id()).collect(),
 		};
@@ -273,23 +278,28 @@ impl Group {
 				// n: [a, c, e]
 				// in either case, keys never change, plus, to_notify is as ordered as encryption.ctds
 				// TODO: make such bond stronger
-				(id.clone(), if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
-					Some(encryption.ctds[idx])
-				} else {
-					None
-				})
+				(
+					id.clone(),
+					if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
+						Some(encryption.ctds[idx])
+					} else {
+						None
+					},
+				)
 			})
 			.collect::<Vec<(Id, Option<Ctd>)>>();
 
-		let welcomes =  new.welcome(&to_welcome, &joiner_secret, &conf_tag);
+		let welcomes = new.welcome(&to_welcome, &joiner_secret, &conf_tag);
 
-		self.pending_commits.insert(framed_commit.id(), PendingCommit {
-			state: new,
-			proposals: fps.iter().map(|p| p.id()).collect(),
-		});
+		self.pending_commits.insert(
+			framed_commit.id(),
+			PendingCommit {
+				state: new,
+				proposals: fps.iter().map(|p| p.id()).collect(),
+			},
+		);
 
 		(framed_commit, ctds, welcomes)
-
 	}
 
 	fn welcome(
@@ -297,8 +307,36 @@ impl Group {
 		invited: &[Member],
 		joiner_secret: &JoinerSecret,
 		conf_tag: &hmac::Digest,
-	) -> Option<(WelcomeI, Vec<WelcomeD>)> {
-		todo!()
+	) -> Option<(WlcmCti, Vec<WlcmCtd>)> {
+		if invited.is_empty() {
+			None
+		} else {
+			let info = welcome::Info::new(
+				self.uid,
+				self.epoch,
+				self.roster.clone(),
+				self.conf_trans_hash,
+				conf_tag.clone(),
+				self.user_id,
+			);
+			let keys = invited
+				.iter()
+				.map(|m| m.kp.ek)
+				.collect::<Vec<ilum::PublicKey>>();
+
+			// FIXME: it's better to encrypt the whole welcome::Info object + joiner, but joiner only is ok for now as well
+			let encryption = hpkencrypt::encrypt(joiner_secret, &self.seed, &keys);
+			let to_sign = Sha256::digest([info.hash().as_slice(), &encryption.cti.hash()].concat());
+			let sig = self.ssk.sign(&to_sign);
+			let cti = WlcmCti::new(info, encryption.cti, sig);
+			let ctds = invited
+				.iter()
+				.enumerate()
+				.map(|(idx, m)| WlcmCtd::new(m.id, m.kp.id(), encryption.ctds[idx]))
+				.collect();
+
+			Some((cti, ctds))
+		}
 	}
 
 	fn derive_secrets(
@@ -338,31 +376,16 @@ impl Group {
 	// means: "This commit is signed by *ME* from the *GROUP* that has *STATE*"
 	// hence, groupCont() should contain all shared (non derivable) state (its hash)
 	fn sign_commit(&self, commit: &Commit) -> Signature {
-		// 1: comCont ← (G.groupCont(), G.id, ‘commit’,𝐶0)
-		// 2: sig ← SIG.Sign(ppSIG, G.ssk, comCont)
-		// 3: return sig
+		let to_sign = Sha256::digest(
+			[
+				self.ctx().as_slice(),
+				self.user_id.as_bytes(),
+				&commit.hash(),
+			]
+			.concat(),
+		);
 
-		// groupContWInterim := gs.GroupContWInterim() // does this authenticate anything?
-
-		// packedC := c.Pack(pad) // TODO: use hash_pack instead
-		// comCont := hashPack(
-		// 	pad,
-		// 	CommitSignId,
-		// 	groupContWInterim,
-		// 	[]byte(gs.Id), // sender
-		// 	[]byte("commit"),
-		// 	packedC,
-		// )
-		// sig, err := gs.Ssk.Sign(
-		// 	nil,
-		// 	comCont,
-		// 	crypto.Hash(0),
-		// )
-		// if err != nil {
-		// 	panic(err)
-		// }
-		// return sig
-		todo!()
+		self.ssk.sign(&to_sign)
 	}
 
 	fn frame_commit(
