@@ -28,8 +28,10 @@ impl Hashable for Proposal {
 	}
 }
 
+#[derive(Clone)]
 pub struct Nonce(pub [u8; 4]);
 
+#[derive(Clone)]
 pub struct FramedProposal {
 	pub guid: Hash,
 	pub epoch: u64,

@@ -7,7 +7,9 @@ use crate::commit::{Commit, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
 use crate::key_package::KeyPackage;
-use crate::key_schedule::{CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret};
+use crate::key_schedule::{
+	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
+};
 use crate::member::{Id, Member};
 use crate::proposal::{self, FramedProposal, Proposal};
 use crate::roster::Roster;
@@ -39,8 +41,9 @@ pub struct Group {
 	roster: Roster,
 
 	// TODO: HashMap<Id, vert_svks>?
+	// TODO: move to a higher level entity
 	pending_updates: HashMap<Id, PendingUpdate>,
-	pending_commits: HashMap<Id, PendingCommit>,
+	pending_commits: HashMap<Id, PendingCommit>, // keyed by FramedCommit.id
 
 	// FIXME: introduce a struct similar to Owner
 	// my id
@@ -155,7 +158,15 @@ impl Group {
 		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce);
 		let mac = hmac::digest(&mac_key, &to_mac);
 
-		FramedProposal::new(self.uid, self.epoch, self.user_id, proposal, sig, mac, mac_nonce)
+		FramedProposal::new(
+			self.uid,
+			self.epoch,
+			self.user_id,
+			proposal,
+			sig,
+			mac,
+			mac_nonce,
+		)
 	}
 
 	// returns (user_id, Proposal)
@@ -170,26 +181,21 @@ impl Group {
 
 		if let Some(sender) = self.roster.get(&fp.sender) {
 			let to_sign = Sha256::digest(
-				[
-					self.ctx().as_slice(),
-					fp.sender.as_bytes(),
-					&fp.prop.hash(),
-				]
-				.concat(),
+				[self.ctx().as_slice(), fp.sender.as_bytes(), &fp.prop.hash()].concat(), // TODO: move to a helper pack function?
 			);
 
 			if !sender.kp.svk.verify(&to_sign, &fp.sig) {
 				return Err(Error::InvalidSignature);
 			}
 
-			let to_mac = Sha256::digest([to_sign.as_slice(), fp.sig.as_bytes()].concat());
+			let to_mac = Sha256::digest([to_sign.as_slice(), fp.sig.as_bytes()].concat()); // TODO: move to a helper pack function?
 			let mac_key = Self::mac_key(&self.secrets.mac, &fp.sender, &fp.nonce);
 
 			if !hmac::verify(&to_mac, &mac_key, &fp.mac) {
 				return Err(Error::InvalidMac);
 			}
 
-			return Ok((fp.sender, fp.prop.clone()))
+			return Ok((fp.sender, fp.prop.clone()));
 		} else {
 			return Err(Error::UnknownSender);
 		}
@@ -210,7 +216,7 @@ impl Group {
 	// TODO: return a new group state instead of using mut?
 	// apply proposals: get the new state + diffs + filter bad proposals
 	// these should be filtered/validated and ordered by an outer layer
-	pub fn commit(&self, fps: &[FramedProposal]) {
+	pub fn commit(&mut self, fps: &[FramedProposal]) -> (FramedCommit, Vec<(Id, Option<Ctd>)>, Option<(WelcomeI, Vec<WelcomeD>)>) {
 		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
 		let (mut new, diff) = self.aply_proposals(fps);
 
@@ -222,20 +228,18 @@ impl Group {
 
 		// these will get Welcome
 		let to_welcome = diff.added;
-		// these will get Commit
+		// these will get Commit; there will always be at least one recipient – me
 		// TODO: move to Roster and test
 		let to_notify = new
 			.roster
 			.ids()
 			.into_iter()
-			.filter(|id| !to_welcome.contains(id))
+			.filter(|id| !to_welcome.iter().find(|m| m.id == *id).is_some())
 			.map(|id| new.roster.get(&id).unwrap().clone())
 			.collect::<Vec<Member>>();
 
 		let (com_secret, com_kp, encryption) = new.rekey(&to_notify);
 
-		// member_hash is automatically derived at this point
-		// a shared commit part that is to be signed; will be sent to ids_to_notify
 		let commit = Commit {
 			kp: com_kp,
 			cti: encryption.cti,
@@ -247,17 +251,18 @@ impl Group {
 
 		// sign commit
 		let sig = self.sign_commit(&commit);
-		new.conf_trans_hash = self.derive_conf_trans_hash(&self.user_id, &commit, &sig);
+		new.conf_trans_hash = self.derive_conf_trans_hash(&self.user_id, &commit, &sig); // TODO: move to Transcript/Ledger?
 
-		let (joiner, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
+		let (joiner_secret, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
 		new.secrets = epoch_secrets;
 
 		let conf_tag = Self::conf_tag(&conf_key, &new.conf_trans_hash);
 		new.interim_trans_hash =
 			Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
 
-		// TODO: if I allow updating my own keys, will I be able to unframe/verify? – rather yes, since the new state is not applied (see PendingCommit)
 		let framed_commit = self.frame_commit(&commit, &sig, &conf_tag);
+		// empty ctd-s will be sent to the removed users, while non-empty ones – to to_notify
+		// the removed ones will too have access to this new epoch, but won't be able to decrypt it for no corresponding ctd would exist
 		let ctds = self
 			.roster
 			.ids()
@@ -268,17 +273,23 @@ impl Group {
 				// n: [a, c, e]
 				// in either case, keys never change, plus, to_notify is as ordered as encryption.ctds
 				// TODO: make such bond stronger
-				if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
-					Some((id.clone(), encryption.ctds[idx]))
+				(id.clone(), if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
+					Some(encryption.ctds[idx])
 				} else {
 					None
-				}
+				})
 			})
-			.collect::<Vec<Option<(Id, Ctd)>>>();
+			.collect::<Vec<(Id, Option<Ctd>)>>();
 
-		// add welcomes
-		// assing pend_com
-		// return (framed_commit, (node_id, ctd), wi, (node_id, wd))
+		let welcomes =  new.welcome(&to_welcome, &joiner_secret, &conf_tag);
+
+		self.pending_commits.insert(framed_commit.id(), PendingCommit {
+			state: new,
+			proposals: fps.iter().map(|p| p.id()).collect(),
+		});
+
+		(framed_commit, ctds, welcomes)
+
 	}
 
 	fn welcome(
@@ -286,7 +297,7 @@ impl Group {
 		invited: &[Member],
 		joiner_secret: &JoinerSecret,
 		conf_tag: &hmac::Digest,
-	) -> (WelcomeI, Vec<WelcomeD>) {
+	) -> Option<(WelcomeI, Vec<WelcomeD>)> {
 		todo!()
 	}
 
@@ -426,8 +437,8 @@ impl Group {
 struct Diff {
 	updated: Vec<Id>,
 	removed: Vec<Id>,
-	added: Vec<Id>, // a sender can propose any number of Deltas
-	                // a receiver can have one Delta
+	added: Vec<Member>, // a sender can propose any number of Deltas
+	                    // a receiver can have one Delta
 }
 
 impl Group {
@@ -441,15 +452,9 @@ impl Group {
 	}
 
 	fn mac_key(seed: &MacSecret, user_id: &Id, nonce: &proposal::Nonce) -> hmac::Key {
-		hmac::Key::new(Sha256::digest(
-			[
-				seed.as_slice(),
-				user_id.as_bytes(),
-				&nonce.0,
-			]
-			.concat(),
+		hmac::Key::new(
+			Sha256::digest([seed.as_slice(), user_id.as_bytes(), &nonce.0].concat()).into(),
 		)
-		.into())
 	}
 
 	fn derive_ctx(uid: &[u8], epoch: u64, roster: &Roster, conf_trans_hash: &[u8]) -> Hash {
@@ -476,9 +481,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_frame_unframe_proposal() {
-
-	}
+	fn test_frame_unframe_proposal() {}
 
 	#[test]
 	fn test_apply_proposals() {
