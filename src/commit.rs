@@ -1,4 +1,4 @@
-use crate::{group::Group, hash::Hashable, hpkencrypt, key_package::KeyPackage, member::Id};
+use crate::{group::Group, hmac, hash::{Hashable, Hash}, hpkencrypt, key_package::KeyPackage, member::Id, dilithium::Signature};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
@@ -9,6 +9,7 @@ pub struct PendingCommit {
 	pub proposals: Vec<Id>,
 }
 
+#[derive(Clone)]
 pub struct Commit {
 	// committer new key package
 	pub kp: KeyPackage,
@@ -39,24 +40,30 @@ impl Hashable for Commit {
 
 // I already have types for Cti & Ctd, but sym enc is now required (Cti)
 pub struct FramedCommit {
-	//
-	// 1 : return (G.groupid, G.epoch, G.id, ‘commit’,𝐶0, sig, confTag)
+	pub guid: Hash,
+	pub epoch: u64,
+	pub sender: Id,
+	pub commit: Commit,
+	pub sig: Signature,
+	pub conf_tag: hmac::Digest
 }
 
 impl FramedCommit {
+	pub fn new(guid: Hash, epoch: u64, sender: Id, commit: Commit, sig: Signature, conf_tag: hmac::Digest) -> Self {
+		Self { guid, epoch, sender, commit, sig, conf_tag }
+	}
+
 	pub fn id(&self) -> Id {
-		// simply hash myself?
-		todo!()
-		// return string(hashPack(
-		// 	pad,
-		// 	FramedCommitKeyHashId,
-		// 	fc.GroupId,
-		// 	packUint(fc.Epoch),
-		// 	fc.InterimTransHash,
-		// 	[]byte(fc.Id),
-		// 	fc.C0.Pack(pad),
-		// 	fc.Sig,
-		// 	fc.ConfTag,
-		// ))
+		Id(Sha256::digest(
+			[
+				self.guid.as_slice(),
+				&self.epoch.to_be_bytes(),
+				self.sender.as_bytes(),
+				&self.commit.hash(),
+				self.sig.as_bytes(),
+				self.conf_tag.as_bytes()
+			]
+			.concat(),
+		).into())
 	}
 }

@@ -20,6 +20,7 @@ pub struct Encryption {
 
 // Compound, key-independent ciphertext
 // REVIEW: applies to CmPKEs only
+#[derive(Clone)]
 pub struct CmpdCti {
 	// key-independent encapsulation
 	pub cti: ilum::Cti,

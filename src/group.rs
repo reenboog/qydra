@@ -353,6 +353,7 @@ impl Group {
 	fn derive_conf_trans_hash(&self, committer: &Id, commit: &Commit, sig: &Signature) -> Hash {
 		Sha256::digest(
 			[
+				// TODO: use ctx() instead of { uid, epoch }?
 				self.uid.as_slice(),
 				&self.epoch.to_be_bytes(),
 				&commit.hash(),
@@ -385,7 +386,7 @@ impl Group {
 		sig: &Signature,
 		conf_tag: &hmac::Digest,
 	) -> FramedCommit {
-		todo!()
+		FramedCommit::new(self.uid, self.epoch, self.user_id, commit.clone(), sig.clone(), conf_tag.clone())
 	}
 
 	// TODO: return (com, kp, enc) and apply instead of state change?
