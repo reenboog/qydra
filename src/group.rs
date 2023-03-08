@@ -169,6 +169,36 @@ impl Group {
 		)
 	}
 
+	fn unframe_commit(&self, fc: &FramedCommit) -> Result<(Id, Commit, Signature, hmac::Digest), Error> {
+		if fc.guid != self.uid {
+			return Err(Error::WrongGroup);
+		}
+
+		if fc.epoch != self.epoch {
+			return Err(Error::WrongEpoch);
+		}
+
+		if let Some(sender) = self.roster.get(&fc.sender) {
+			// TODO: introduce a helper pack function
+			let to_sign = Sha256::digest(
+				[
+					self.ctx().as_slice(),
+					fc.sender.as_bytes(),
+					&fc.commit.hash(),
+				]
+				.concat(),
+			);
+
+			if !sender.kp.svk.verify(&to_sign, &fc.sig) {
+				return Err(Error::InvalidSignature);
+			}
+
+			return Ok((fc.sender, fc.commit.clone(), fc.sig.clone(), fc.conf_tag));
+		} else {
+			return Err(Error::UnknownSender);
+		}
+	}
+
 	// returns (user_id, Proposal)
 	fn unframe_proposal(&self, fp: &FramedProposal) -> Result<(Id, Proposal), Error> {
 		if fp.guid != self.uid {
@@ -302,6 +332,12 @@ impl Group {
 		(framed_commit, ctds, welcomes)
 	}
 
+	// TODO: wrap { FramedCommit, Ctd }?
+	pub fn process(&self, fc: &FramedCommit, ctd: &ilum::Ctd, fps: &[FramedProposal]) {
+		// TODO: implement
+		let c = self.unframe_commit(fc);
+	}
+
 	fn welcome(
 		&self,
 		invited: &[Member],
@@ -362,12 +398,14 @@ impl Group {
 				committer.as_bytes(),
 			]
 			.concat(),
-		).into()
+		)
+		.into()
 	}
 
 	// means: "This commit is signed by *ME* from the *GROUP* that has *STATE*"
 	// hence, groupCont() should contain all shared (non derivable) state (its hash)
 	fn sign_commit(&self, commit: &Commit) -> Signature {
+		// TODO: move to a helper pack function?
 		let to_sign = Sha256::digest(
 			[
 				self.ctx().as_slice(),
@@ -386,7 +424,14 @@ impl Group {
 		sig: &Signature,
 		conf_tag: &hmac::Digest,
 	) -> FramedCommit {
-		FramedCommit::new(self.uid, self.epoch, self.user_id, commit.clone(), sig.clone(), conf_tag.clone())
+		FramedCommit::new(
+			self.uid,
+			self.epoch,
+			self.user_id,
+			commit.clone(),
+			sig.clone(),
+			conf_tag.clone(),
+		)
 	}
 
 	// TODO: return (com, kp, enc) and apply instead of state change?
@@ -441,12 +486,6 @@ impl Group {
 		// verify signature
 	}
 }
-
-// struct Delta {
-// 	// it is possible to process someone else's proposals, so sender is required
-// 	sender: Id,
-// 	proposal: Proposal,
-// }
 
 // A properly ordered, validated set of proposals
 struct Diff {

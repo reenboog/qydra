@@ -1,4 +1,11 @@
-use crate::{group::Group, hmac, hash::{Hashable, Hash}, hpkencrypt, key_package::KeyPackage, member::Id, dilithium::Signature};
+use crate::{
+	dilithium::Signature,
+	group::Group,
+	hash::{Hash, Hashable},
+	hmac, hpkencrypt,
+	key_package::KeyPackage,
+	member::Id,
+};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
@@ -45,12 +52,26 @@ pub struct FramedCommit {
 	pub sender: Id,
 	pub commit: Commit,
 	pub sig: Signature,
-	pub conf_tag: hmac::Digest
+	pub conf_tag: hmac::Digest,
 }
 
 impl FramedCommit {
-	pub fn new(guid: Hash, epoch: u64, sender: Id, commit: Commit, sig: Signature, conf_tag: hmac::Digest) -> Self {
-		Self { guid, epoch, sender, commit, sig, conf_tag }
+	pub fn new(
+		guid: Hash,
+		epoch: u64,
+		sender: Id,
+		commit: Commit,
+		sig: Signature,
+		conf_tag: hmac::Digest,
+	) -> Self {
+		Self {
+			guid,
+			epoch,
+			sender,
+			commit,
+			sig,
+			conf_tag,
+		}
 	}
 
 	pub fn id(&self) -> Id {
@@ -61,9 +82,10 @@ impl FramedCommit {
 				self.sender.as_bytes(),
 				&self.commit.hash(),
 				self.sig.as_bytes(),
-				self.conf_tag.as_bytes()
+				self.conf_tag.as_bytes(),
 			]
 			.concat(),
-		).into())
+		)
+		.into())
 	}
 }
