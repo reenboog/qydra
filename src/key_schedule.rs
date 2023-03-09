@@ -15,6 +15,7 @@ pub type CommitSecret = [u8; hash::SIZE]; // sent to existing users; later appli
 pub type InitSecret = [u8; hash::SIZE];
 pub type AppSecret = [u8; hash::SIZE];
 pub type MacSecret = [u8; hash::SIZE];
+// TODO: introduce ResumptinSecret for session reinitialization?
 
 #[derive(Clone)]
 pub struct EpochSecrets {

@@ -15,7 +15,7 @@ use crate::proposal::{self, FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
-use crate::{dilithium, hmac, hpkencrypt, key_schedule};
+use crate::{aes_gcm, dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 pub enum Error {
@@ -24,6 +24,20 @@ pub enum Error {
 	UnknownSender,
 	InvalidSignature,
 	InvalidMac,
+	// basically impossible: we're processing our own commit that we don't have; impersonation could take place; abort
+	UnknownPendingCommit,
+	// a commit referring to unknown proposals is being processed; retry policy could be applied
+	PropsMismatch,
+	// we're trying to commit while being removed in one of its proposals; abort, someone else should commit instead
+	SelfRemoveNotAllowed,
+	// corresponds to either KeyPairMismatch or BadAesMaterial; in general, should never happen
+	HpkeDecryptFailed,
+	// the supplied key pair failed to verify: pk-sk was either not signed with ssk or something else
+	InvalidCommitKeyPair,
+	// whatever was encapsulated by the committer is of unexpected form
+	WrongComSecretSize,
+	// failed to converge to a shared state
+	InvalidConfTag,
 }
 
 // group state
@@ -169,7 +183,11 @@ impl Group {
 		)
 	}
 
-	fn unframe_commit(&self, fc: &FramedCommit) -> Result<(Id, Commit, Signature, hmac::Digest), Error> {
+	/// verifies commit's guid, epoch & signature
+	fn unframe_commit(
+		&self,
+		fc: &FramedCommit,
+	) -> Result<(Id, Commit, Signature, hmac::Digest), Error> {
 		if fc.guid != self.uid {
 			return Err(Error::WrongGroup);
 		}
@@ -249,19 +267,33 @@ impl Group {
 	pub fn commit(
 		&mut self,
 		fps: &[FramedProposal],
-	) -> (
-		FramedCommit,
-		Vec<(Id, Option<Ctd>)>,
-		Option<(WlcmCti, Vec<WlcmCtd>)>,
-	) {
+	) -> Result<
+		(
+			FramedCommit,
+			Vec<(Id, Option<Ctd>)>,
+			Option<(WlcmCti, Vec<WlcmCtd>)>,
+		),
+		Error,
+	> {
 		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
 		let (mut new, diff) = self.aply_proposals(fps);
 
-		// by the spec, I am to check these:
-		// 1 assert(!changes.removes.contains(self.user_id))
-		// 2 assert(!changes.updates.contans(self.user_id))
-		// but I should actually check it all at a higher level
-		// plus, it's fine committing my own update actually
+		// REVIEW: this should be checked by a higher level in the first place
+		// self-removing commits make not sence for it is the committer who generates new entropy:
+		// if you're evicted, you can't have access to the group's new state, hence you can't be the source of that state
+
+		// in general, self-remove can be achieved by merely sending a proposal and clearing all local state:
+		// recipients, will later commit such a proposal while the sender would not care anymore
+		// though what if such a proposal is lost, eg A proposes while B commits? Should A keep sending?
+		// should there a dedicated message be introduced for simplicity/consistency?
+
+		// in a multi-device setting, it is also sufficient to check whether the proposal is sent from "me",
+		// which should be done by a higher leve as well
+		if diff.removed.contains(&self.user_id) {
+			return Err(Error::SelfRemoveNotAllowed);
+		}
+		// suggested by design, but self-updates should actually be fine
+		// assert(!changes.updates.contans(self.user_id))
 
 		// these will get Welcome
 		let to_welcome = diff.added;
@@ -329,13 +361,97 @@ impl Group {
 			},
 		);
 
-		(framed_commit, ctds, welcomes)
+		Ok((framed_commit, ctds, welcomes))
 	}
 
 	// TODO: wrap { FramedCommit, Ctd }?
-	pub fn process(&self, fc: &FramedCommit, ctd: &ilum::Ctd, fps: &[FramedProposal]) {
-		// TODO: implement
-		let c = self.unframe_commit(fc);
+	pub fn process(
+		&self,
+		fc: &FramedCommit,
+		ctd: &ilum::Ctd,
+		fps: &[FramedProposal],
+	) -> Result<Option<Group>, Error> {
+		// verify group, epoch, membership and the signature first
+		let (sender, commit, sig, conf_tag) = self.unframe_commit(fc)?;
+
+		if sender == self.user_id {
+			// this is one of my own commits, so just returns its state and apply it
+			if let Some(pc) = self.pending_commits.get(&fc.id()) {
+				// REVIEW: do I need to ensure fc.prop_ids ⊆ fps at this particular point?
+				// by now, I already have a precomputed state, plus, the commit is verified, so we should be ok
+
+				return Ok(Some(pc.state.clone()));
+			} else {
+				// the proposed (by me) framed commit passed all validations, but was not found locally; should not ever be possible
+				return Err(Error::UnknownPendingCommit);
+			}
+		} else {
+			// this is someone else's commit, so update your state by applying its proposals
+
+			// late proposals could be received after/while the commit's sent, so fps ⊇ fc.prop_ids is possible, but
+			// it is crucial to *ensure* fc.prop_ids ⊆ fps, otherwise the new state won't converge
+			// alternatively, we could ignore all this and rely on conf_tag solely (if it fails, it fails),
+			// but this check gives a bit more of context
+			let fps = fps
+				.into_iter()
+				.filter(|&fp| commit.prop_ids.contains(&fp.id()))
+				.cloned()
+				.collect::<Vec<FramedProposal>>();
+
+			if fps.len() != commit.prop_ids.len() {
+				return Err(Error::PropsMismatch);
+			}
+
+			let (mut new, diff) = self.aply_proposals(&fps);
+			// we do allow committing self-updates, but how about self-removes? self-removes are not allowed
+
+			if diff.removed.contains(&sender) {
+				// committers can't remove themselves
+				return Err(Error::SelfRemoveNotAllowed);
+			}
+
+			if diff.removed.contains(&self.user_id) {
+				// I was removed; clear my state and leave
+				return Ok(None);
+			}
+
+			new.conf_trans_hash = self.derive_conf_trans_hash(&sender, &commit, &sig);
+
+			let ek = self.roster.get(&self.user_id).unwrap().kp.ek;
+			let com_secret = CommitSecret::try_from(
+				hpkencrypt::decrypt(
+					&commit.cti.sym_ct,
+					&commit.cti.cti,
+					ctd,
+					&self.seed,
+					&ek,
+					&self.dk,
+					&commit.cti.iv,
+				)
+				.or(Err(Error::HpkeDecryptFailed))?,
+			)
+			.or(Err(Error::WrongComSecretSize))?;
+
+			// REVIEW: this verifies the new ilum keypair, but assumes signing keys are static for now;
+			// otherwise, committers would need to sign their new signing keys with their current epoch's signing keys
+			if !commit.kp.verify() {
+				return Err(Error::InvalidCommitKeyPair);
+			}
+
+			new.roster.set(&sender, &commit.kp);
+
+			let (_, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
+
+			if !Self::verify_conf_tag(&conf_key, &new.conf_trans_hash, &conf_tag) {
+				return Err(Error::InvalidConfTag);
+			}
+
+			new.secrets = epoch_secrets;
+			new.interim_trans_hash =
+				Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
+
+			return Ok(Some(new));
+		}
 	}
 
 	fn welcome(
@@ -464,26 +580,20 @@ impl Group {
 		// FIXME: add these checks?
 		// in the spec:
 
+		// verifies sig and mac
+
 		// TODO: rather apply props and don't do anything – they should be already validated
 		fps.into_iter().for_each(|fp| {
 			// TODO: implement
 			match fp.prop {
-				Proposal::Add { id, ref kp } => todo!(),
+				Proposal::Add { id, ref kp } => todo!(), // TODO: verify the new svk
 				Proposal::Remove { id } => todo!(),
-				Proposal::Update { ref kp } => todo!(),
+				Proposal::Update { ref kp } => todo!(), // TODO: verify the new svk
 			};
 		});
 
 		// (new, diff)
 		todo!()
-	}
-
-	fn verify_kp(id: &Id, kp: &KeyPackage) {
-		// id == pk.id
-		// if I don't have kp in my certs
-		// send a VERIFY req to the backend: // almost TOFU
-		// 	 if ok, add this pk to my certs
-		// verify signature
 	}
 }
 
@@ -501,8 +611,12 @@ impl Group {
 		Sha256::digest([conf_trans_hash.as_slice(), conf_tag].concat()).into()
 	}
 
-	fn conf_tag(conf_key: &Hash, conf_trans_hash: &Hash) -> hmac::Digest {
-		hmac::digest(&hmac::Key::from(conf_key), conf_trans_hash)
+	fn conf_tag(key: &Hash, conf_trans_hash: &Hash) -> hmac::Digest {
+		hmac::digest(&hmac::Key::from(key), conf_trans_hash)
+	}
+
+	fn verify_conf_tag(key: &Hash, conf_trans_hash: &Hash, tag: &hmac::Digest) -> bool {
+		hmac::verify(conf_trans_hash, &hmac::Key::from(key), tag)
 	}
 
 	fn mac_key(seed: &MacSecret, user_id: &Id, nonce: &proposal::Nonce) -> hmac::Key {
