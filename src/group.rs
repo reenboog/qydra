@@ -375,7 +375,7 @@ impl Group {
 		let (sender, commit, sig, conf_tag) = self.unframe_commit(fc)?;
 
 		if sender == self.user_id {
-			// this is one of my own commits, so just returns its state and apply it
+			// this is one of my own commits, so just return its state and apply it
 			if let Some(pc) = self.pending_commits.get(&fc.id()) {
 				// REVIEW: do I need to ensure fc.prop_ids ⊆ fps at this particular point?
 				// by now, I already have a precomputed state, plus, the commit is verified, so we should be ok
@@ -403,7 +403,6 @@ impl Group {
 			}
 
 			let (mut new, diff) = self.aply_proposals(&fps);
-			// we do allow committing self-updates, but how about self-removes? self-removes are not allowed
 
 			if diff.removed.contains(&sender) {
 				// committers can't remove themselves
