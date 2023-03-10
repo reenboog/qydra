@@ -154,12 +154,12 @@ impl Group {
 		}
 	}
 
-	// TODO: use Result instead
-	pub fn propose_remove(&self, id: &Id) -> FramedProposal {
-		// FIXME: use a result instead
-		assert!(self.roster.contains(id));
-
-		self.frame_proposal(Proposal::Remove { id: id.clone() })
+	pub fn propose_remove(&self, id: &Id) -> Result<FramedProposal, Error> {
+		if !self.roster.contains(id) {
+			Err(Error::UserDoesNotExist)
+		} else {
+			Ok(self.frame_proposal(Proposal::Remove { id: id.clone() }))
+		}
 	}
 
 	pub fn propose_update(&mut self) -> FramedProposal {
