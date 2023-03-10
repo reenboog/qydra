@@ -24,6 +24,8 @@ pub enum Error {
 	UnknownSender,
 	InvalidSignature,
 	InvalidMac,
+	UserDoesNotExist,
+	UserAlreadyExists,
 	// basically impossible: we're processing our own commit that we don't have; impersonation could take place; abort
 	UnknownPendingCommit,
 	// a commit referring to unknown proposals is being processed; retry policy could be applied
@@ -144,11 +146,12 @@ impl Group {
 	}
 
 	// TODO: this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
-	pub fn propose_add(&self, id: Id, kp: KeyPackage) -> FramedProposal {
-		// FIXME: use a result instead
-		assert!(!self.roster.contains(&id));
-
-		self.frame_proposal(Proposal::Add { id, kp })
+	pub fn propose_add(&self, id: Id, kp: KeyPackage) -> Result<FramedProposal, Error> {
+		if self.roster.contains(&id) {
+			Err(Error::UserAlreadyExists)
+		} else {
+			Ok(self.frame_proposal(Proposal::Add { id, kp }))
+		}
 	}
 
 	// TODO: use Result instead
