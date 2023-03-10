@@ -46,6 +46,10 @@ impl Roster {
 	pub fn ids(&self) -> Vec<Id> {
 		self.members.keys().map(|k| *k).collect()
 	}
+
+	pub fn verify_keys(&self) -> bool {
+		self.members.values().all(|m| m.kp.verify())
+	}
 }
 
 impl From<Member> for Roster {

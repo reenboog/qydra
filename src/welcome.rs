@@ -21,9 +21,9 @@ impl WlcmCti {
 }
 
 pub struct WlcmCtd {
-	user_id: Id,
-	key_id: Id,
-	ctd: Ctd,
+	pub user_id: Id,
+	pub key_id: Id,
+	pub ctd: Ctd,
 }
 
 impl WlcmCtd {

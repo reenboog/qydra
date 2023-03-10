@@ -9,3 +9,5 @@ pub fn empty() -> Hash {
 pub trait Hashable {
 	fn hash(&self) -> Hash;
 }
+
+// TODO: move all the sha256 logic here

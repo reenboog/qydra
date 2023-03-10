@@ -38,6 +38,20 @@ pub enum Error {
 	WrongComSecretSize,
 	// failed to converge to a shared state
 	InvalidConfTag,
+	// this invite was not meant for me
+	NotMyWelcome,
+	// invitee is not in the group, but trying to invite you to it
+	UnauthorizedInviter,
+	// invitation is improperly signed or forged
+	InvalidWelcomeSignature,
+	// some of the roster's key pairs failed to verify
+	ForgedRoster,
+	// I received a welcome, but I'm not in its roster
+	InvitedButNotInRoster,
+	// key advertised in the welcome message does not match with what's used for the roster
+	InitKeyMismatch,
+	// whatever was encapsulated by the inviter is of unexpected form
+	WrongJoinerSecretSize,
 }
 
 // group state
@@ -409,6 +423,7 @@ impl Group {
 				return Err(Error::SelfRemoveNotAllowed);
 			}
 
+			// TODO: my ctd should be nil, if I get here;
 			if diff.removed.contains(&self.user_id) {
 				// I was removed; clear my state and leave
 				return Ok(None);
@@ -487,6 +502,94 @@ impl Group {
 				.collect();
 
 			Some((cti, ctds))
+		}
+	}
+
+	// include the used keys as well?
+	// kp, dk & ssk should be fetched from a local storage by wd.key_id
+	pub fn join(
+		id: &Id,
+		kp: &KeyPackage,
+		dk: &ilum::SecretKey,
+		ssk: &dilithium::PrivateKey,
+		seed: &Seed,
+		wi: &WlcmCti,
+		wd: &WlcmCtd,
+	) -> Result<Self, Error> {
+		if let Some(inviter) = wi.info.roster.get(&wi.info.inviter) {
+			if *id != wd.user_id {
+				return Err(Error::NotMyWelcome);
+			}
+
+			let me = wi
+				.info
+				.roster
+				.get(id)
+				.map_or(Err(Error::InvitedButNotInRoster), |m| Ok(m))?;
+
+			// kp should be prefetched from a local storage by wd.key_id
+			if kp.id() != me.kp.id() {
+				return Err(Error::InitKeyMismatch);
+			}
+
+			let to_sign = Sha256::digest([wi.info.hash().as_slice(), &wi.cti.hash()].concat());
+
+			if !inviter.kp.svk.verify(&to_sign, &wi.sig) {
+				return Err(Error::InvalidWelcomeSignature);
+			}
+
+			if !wi.info.roster.verify_keys() {
+				return Err(Error::ForgedRoster);
+			}
+
+			// let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
+			let ctx = Self::derive_ctx(
+				&wi.info.guid,
+				wi.info.epoch,
+				&wi.info.roster,
+				&wi.info.conf_trans_hash,
+			);
+			let joiner = JoinerSecret::try_from(
+				hpkencrypt::decrypt(
+					&wi.cti.sym_ct,
+					&wi.cti.cti,
+					&wd.ctd,
+					seed,
+					&me.kp.ek,
+					&dk,
+					&wi.cti.iv,
+				)
+				.or(Err(Error::HpkeDecryptFailed))?,
+			)
+			.or(Err(Error::WrongJoinerSecretSize))?;
+			let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner);
+
+			if !Self::verify_conf_tag(&conf_key, &wi.info.conf_trans_hash, &wi.info.conf_tag) {
+				return Err(Error::InvalidConfTag);
+			}
+
+			let interim_trans_hash =
+				Self::interim_trans_hash(&wi.info.conf_trans_hash, wi.info.conf_tag.as_bytes());
+
+			let group = Group {
+				uid: wi.info.guid,
+				epoch: wi.info.epoch,
+				seed: seed.clone(),
+				conf_trans_hash: wi.info.conf_trans_hash,
+				interim_trans_hash,
+				roster: wi.info.roster.clone(),
+				pending_updates: HashMap::new(),
+				pending_commits: HashMap::new(),
+				user_id: id.clone(),
+				dk: dk.clone(),
+				ssk: ssk.clone(),
+				secrets,
+			};
+
+			return Ok(group);
+		} else {
+			//
+			return Err(Error::UnauthorizedInviter);
 		}
 	}
 
