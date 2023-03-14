@@ -1,17 +1,4 @@
-use crate::{hash::Hashable, key_package::KeyPackage};
-
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Id(pub [u8; Self::SIZE]);
-
-impl Id {
-	pub const SIZE: usize = 32;
-}
-
-impl Id {
-	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
-		&self.0
-	}
-}
+use crate::{hash::Hashable, id::Id, key_package::KeyPackage};
 
 #[derive(Clone)]
 pub struct Member {

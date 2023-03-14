@@ -6,16 +6,17 @@ use rand::Rng;
 use crate::commit::{Commit, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
+use crate::id::Id;
 use crate::key_package::KeyPackage;
 use crate::key_schedule::{
 	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
 };
-use crate::member::{Id, Member};
+use crate::member::Member;
 use crate::proposal::{self, FramedProposal, Proposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
-use crate::{aes_gcm, dilithium, hmac, hpkencrypt, key_schedule};
+use crate::{dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 pub enum Error {
@@ -55,6 +56,9 @@ pub enum Error {
 	// whatever was encapsulated by the inviter is of unexpected form
 	WrongJoinerSecretSize,
 }
+
+// TODO: include Config?
+// TODO: add padding?
 
 // group state
 #[derive(Clone)]
@@ -148,6 +152,7 @@ impl Group {
 	// TODO: this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
 	pub fn propose_add(&self, id: Id, kp: KeyPackage) -> Result<FramedProposal, Error> {
 		if self.roster.contains(&id) {
+			// TODO: should we verify kp here as well?
 			Err(Error::UserAlreadyExists)
 		} else {
 			Ok(self.frame_proposal(Proposal::Add { id, kp }))
@@ -186,7 +191,7 @@ impl Group {
 		let sig = self.ssk.sign(&to_sign);
 		let to_mac = Sha256::digest([to_sign.as_slice(), sig.as_bytes()].concat());
 		let mac_nonce = proposal::Nonce(rand::thread_rng().gen());
-		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce);
+		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce); // TODO: do I need to use a SecretsTree instead?
 		let mac = hmac::digest(&mac_key, &to_mac);
 
 		FramedProposal::new(
@@ -271,7 +276,7 @@ impl Group {
 		let kp = ilum::gen_keypair(&self.seed);
 		let package = KeyPackage::new(
 			&kp.pk,
-			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap
+			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap; derive pk from sk instead?
 			&self.ssk,
 		);
 

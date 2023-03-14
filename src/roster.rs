@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{
 	hash::{Hash, Hashable},
+	id::Id,
 	key_package::KeyPackage,
-	member::{Id, Member},
+	member::Member,
 };
 
 #[derive(Clone)]
@@ -82,9 +83,25 @@ mod tests {
 	use crate::{
 		dilithium::{PublicKey, Signature},
 		hash::Hashable,
+		id::Id,
 		key_package::KeyPackage,
-		member::{Id, Member},
+		member::Member,
 	};
+
+	#[test]
+	fn test_from_member() {
+		let r = Roster::from(Member::new(
+			Id([12u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
+
+		assert!(r.contains(&Id([12u8; 32])));
+		assert!(!r.contains(&Id([34u8; 32])));
+	}
 
 	#[test]
 	fn test_add() {

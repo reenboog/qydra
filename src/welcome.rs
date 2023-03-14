@@ -2,7 +2,7 @@ use crate::{
 	dilithium::Signature,
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt,
-	member::Id,
+	id::Id,
 	roster::Roster,
 };
 use ilum::Ctd;

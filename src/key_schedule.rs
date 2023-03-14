@@ -29,6 +29,7 @@ pub fn derive_epoch_secrets(
 	ctx: hash::Hash,
 	joiner_secret: &JoinerSecret,
 ) -> (EpochSecrets, ConfirmationSecret) {
+	// TODO: introduce psk into the scheme?
 	let digest = Sha256::digest([ctx.as_slice(), joiner_secret].concat());
 
 	// TODO: introduce SIZE for each subkey?

@@ -3,8 +3,11 @@ use sha2::{Digest, Sha256};
 use crate::{
 	dilithium::{self, Signature},
 	hash::Hashable,
-	member::Id,
+	id::Id,
 };
+
+// no life time is specified; by default, such keys are non expiring
+// no key scheme is specifid; a predefined set of keys is used instead
 
 #[derive(Clone)]
 pub struct KeyPackage {

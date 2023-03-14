@@ -10,6 +10,7 @@ author = "Alex Gievsky"
 # keys
 ilum = { git = "https://github.com/reenboog/ilum", version = "0.1.0" }
 pqcrypto-dilithium = { version = "0.4.6" }
+pqcrypto-traits = { version = "0.3.4"}
 
 # randomness
 rand = { version = "0.8.5" }

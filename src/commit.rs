@@ -3,8 +3,8 @@ use crate::{
 	group::Group,
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt,
+	id::Id,
 	key_package::KeyPackage,
-	member::Id,
 };
 use sha2::{Digest, Sha256};
 

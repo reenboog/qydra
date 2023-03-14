@@ -2,8 +2,8 @@ use crate::{
 	dilithium::Signature,
 	hash::{Hash, Hashable},
 	hmac::Digest,
+	id::Id,
 	key_package::KeyPackage,
-	member::Id,
 };
 
 // TODO: serialize in order to be framed
@@ -13,6 +13,39 @@ pub enum Proposal {
 	Remove { id: Id },
 	Update { kp: KeyPackage }, // id as well? TODO: introduce `proactive` updates to consume other people's prekeys
 }
+
+// Recovery: No need for a proposal, because the assumption is that group members no longer share the same state.
+// Any party that wants to recover the group can create a new group and indicate that they want to include a PSK derived from the recovery_secret of some last known good epoch.
+
+// REVIEW: updates can be lazy and potentially lost while add/remove proposals are to be sent in a commit itself
+
+/*
+
+It contains multiple Update and/or Remove proposals that apply to
+	the same leaf. If the committer has received multiple such
+	proposals they SHOULD prefer any Remove received, or the most
+	recent Update if there are no Removes.
+
+It contains multiple Add proposals that contain KeyPackages that
+	represent the same client according to the application (for
+	example, identical signature keys)
+
+
+A group member that has observed one or more valid proposals within
+	an epoch MUST send a Commit message before sending application data.
+	This ensures, for example, that any members whose removal was
+	proposed during the epoch are actually removed before any
+	application data is transmitted.
+
+
+Due to the asynchronous nature of proposals, receivers of a Commit
+	SHOULD NOT enforce that all valid proposals sent within the current
+	epoch are referenced by the next Commit. In the event that a valid
+	proposal is omitted from the next Commit, and that proposal is still
+	valid in the current epoch, the sender of the proposal MAY resend it
+	after updating it to reflect the current epoch.
+
+*/
 
 impl Hashable for Proposal {
 	fn hash(&self) -> Hash {
