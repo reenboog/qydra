@@ -11,8 +11,8 @@ impl<T, const SIZE: usize> PublicKey<T, SIZE> {
 
 #[cfg(test)]
 mod tests {
-	use crate::id::Id;
 	use super::PublicKey;
+	use crate::id::Id;
 
 	struct TestKeyType;
 	type TestPublicKey = PublicKey<TestKeyType, 10>;

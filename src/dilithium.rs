@@ -71,7 +71,7 @@ impl Signature {
 }
 
 impl Signature {
-	const SIZE: usize = PQCLEAN_DILITHIUM5AES_CLEAN_CRYPTO_BYTES;
+	pub const SIZE: usize = PQCLEAN_DILITHIUM5AES_CLEAN_CRYPTO_BYTES;
 
 	pub fn new(bytes: [u8; Self::SIZE]) -> Self {
 		Self { bytes }

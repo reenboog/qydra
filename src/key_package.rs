@@ -85,13 +85,49 @@ impl KeyPackage {
 
 #[cfg(test)]
 mod tests {
-	#[test]
-	fn test_hash() {
-		//
-	}
+	use super::KeyPackage;
+	use crate::{
+		dilithium::{self, Signature},
+		hash::{Hashable, Hash},
+	};
+	use ilum;
+	use sha2::{Digest, Sha256};
 
 	#[test]
 	fn test_sign_verify() {
-		//
+		let seed = b"1234567890abcdef";
+		let e_kp = ilum::gen_keypair(seed);
+		let s_kp = dilithium::KeyPair::generate();
+		let pack = KeyPackage::new(&e_kp.pk, &s_kp.public, &s_kp.private);
+
+		// verifies, when constructed properly
+		assert!(pack.verify());
+
+		// and fails when it's not
+		let mut forged_pack = pack;
+		forged_pack.signature = Signature::new([1u8; Signature::SIZE]);
+
+		assert!(!forged_pack.verify());
+	}
+
+	#[test]
+	fn test_ensure_whole_content_is_hashed() {
+		// this test ensures not only ilum is used for hashing KeyPackage
+		let seed = b"1234567890abcdef";
+		let e_kp = ilum::gen_keypair(seed);
+		let s_kp = dilithium::KeyPair::generate();
+		let pack = KeyPackage::new(&e_kp.pk, &s_kp.public, &s_kp.private);
+		let hash = pack.hash().to_vec();
+		let target_hash: Hash = Sha256::digest(
+			[
+				pack.ek.as_slice(),
+				pack.svk.as_bytes(),
+				pack.signature.as_bytes(),
+			]
+			.concat(),
+		)
+		.into();
+
+		assert_eq!(hash, target_hash);
 	}
 }
