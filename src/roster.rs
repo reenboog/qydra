@@ -15,6 +15,7 @@ pub struct Roster {
 
 pub enum Error {
 	AlreadyExists,
+	DoesNotExist
 }
 
 impl Roster {
@@ -28,6 +29,10 @@ impl Roster {
 		self.members
 			.insert(member.id, member)
 			.map_or(Ok(()), |_| Err(Error::AlreadyExists))
+	}
+
+	pub fn remove(&mut self, id: &Id) -> Result<(), Error> {
+		self.members.remove(id).map_or(Err(Error::DoesNotExist), |_| Ok(()))
 	}
 
 	pub fn contains(&self, id: &Id) -> bool {
@@ -128,6 +133,33 @@ mod tests {
 				},
 			))
 			.is_err());
+	}
+
+	#[test]
+	fn test_remove() {
+		let mut roster = Roster::from(Member::new(
+			Id([12u8; 32]),
+			KeyPackage {
+				ek: [34u8; 768],
+				svk: PublicKey::new([56u8; 2592]),
+				signature: Signature::new([78u8; 4595]),
+			},
+		));
+
+		_ = roster
+			.add(Member::new(Id([99u8; 32]),
+				KeyPackage {
+					ek: [22u8; 768],
+					svk: PublicKey::new([33u8; 2592]),
+					signature: Signature::new([77u8; 4595]),
+				},
+		));
+
+		assert!(roster.remove(&Id([12u8; 32])).is_ok());
+		assert!(roster.remove(&Id([12u8; 32])).is_err());
+		assert!(roster.remove(&Id([0u8; 32])).is_err());
+		assert!(roster.remove(&Id([99u8; 32])).is_ok());
+		assert!(roster.remove(&Id([99u8; 32])).is_err());
 	}
 
 	#[test]
