@@ -36,7 +36,7 @@ pub enum Error {
 	// corresponds to either KeyPairMismatch or BadAesMaterial; in general, should never happen
 	HpkeDecryptFailed,
 	// the supplied key pair failed to verify: pk-sk was either not signed with ssk or something else
-	InvalidCommitKeyPair,
+	InvalidKeyPair,
 	// whatever was encapsulated by the committer is of unexpected form
 	WrongComSecretSize,
 	// failed to converge to a shared state
@@ -55,6 +55,8 @@ pub enum Error {
 	InitKeyMismatch,
 	// whatever was encapsulated by the inviter is of unexpected form
 	WrongJoinerSecretSize,
+	// I received my own update, validation passed, but no prestored (ssk, dk) pair was found which makes no sense
+	NoPendingUpdateFound
 }
 
 // TODO: include Config?
@@ -241,15 +243,15 @@ impl Group {
 
 	// returns (user_id, Proposal)
 	fn unframe_proposal(&self, fp: &FramedProposal) -> Result<(Id, Proposal), Error> {
-		if fp.guid != self.uid {
-			return Err(Error::WrongGroup);
-		}
-
-		if fp.epoch != self.epoch {
-			return Err(Error::WrongEpoch);
-		}
-
 		if let Some(sender) = self.roster.get(&fp.sender) {
+			if fp.guid != self.uid {
+				return Err(Error::WrongGroup);
+			}
+
+			if fp.epoch != self.epoch {
+				return Err(Error::WrongEpoch);
+			}
+
 			let to_sign = Sha256::digest(
 				[self.ctx().as_slice(), fp.sender.as_bytes(), &fp.prop.hash()].concat(), // TODO: move to a helper pack function?
 			);
@@ -298,7 +300,7 @@ impl Group {
 		Error,
 	> {
 		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
-		let (mut new, diff) = self.aply_proposals(fps);
+		let (mut new, diff) = self.apply_proposals(fps)?;
 
 		// REVIEW: this should be checked by a higher level in the first place
 		// self-removing commits make not sence for it is the committer who generates new entropy:
@@ -424,7 +426,7 @@ impl Group {
 				return Err(Error::PropsMismatch);
 			}
 
-			let (mut new, diff) = self.aply_proposals(&fps);
+			let (mut new, diff) = self.apply_proposals(&fps)?;
 
 			if diff.removed.contains(&sender) {
 				// committers can't remove themselves
@@ -457,7 +459,7 @@ impl Group {
 			// REVIEW: this verifies the new ilum keypair, but assumes signing keys are static for now;
 			// otherwise, committers would need to sign their new signing keys with their current epoch's signing keys
 			if !commit.kp.verify() {
-				return Err(Error::InvalidCommitKeyPair);
+				return Err(Error::InvalidKeyPair);
 			}
 
 			new.roster.set(&sender, &commit.kp);
@@ -684,26 +686,63 @@ impl Group {
 
 	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
 	// TODO: introduce a dedicated type instead of [FramedProposal]
-	fn aply_proposals(&self, fps: &[FramedProposal]) -> (Group, Diff) {
+	fn apply_proposals(&self, fps: &[FramedProposal]) -> Result<(Group, Diff), Error> {
+		// sort and filter first?
 		let mut new = self.next();
+		let mut diff = Diff::new();
 		// updates, removes, adds
 		// FIXME: add these checks?
 		// in the spec:
 
-		// verifies sig and mac
-
 		// TODO: rather apply props and don't do anything – they should be already validated
-		fps.into_iter().for_each(|fp| {
-			// TODO: implement
-			match fp.prop {
-				Proposal::Add { id, ref kp } => todo!(), // TODO: verify the new svk
-				Proposal::Remove { id } => todo!(),
-				Proposal::Update { ref kp } => todo!(), // TODO: verify the new svk
-			};
-		});
+		for idx in 0..fps.len() {
+			let fp = fps.get(idx).unwrap();
+			let (sender, prop) = self.unframe_proposal(fp)?; // check sig, mac, roster.contains
 
-		// (new, diff)
-		todo!()
+			match prop {
+				Proposal::Update { ref kp } => {
+					if kp.verify() {
+						new.roster.set(&sender, kp);
+
+						// this is my own update, so set ssk & dk as well
+						if sender == new.user_id {
+							if let Some(pu) = self.pending_updates.get(&fp.id()) {
+								new.ssk = pu.ssk.clone();
+								new.dk = pu.dk;
+							} else {
+								return Err(Error::NoPendingUpdateFound);
+							}
+						}
+					} else {
+						return Err(Error::InvalidKeyPair);
+					}
+
+					diff.updated.push(sender);
+				},
+				Proposal::Remove { id } => {
+					if new.roster.remove(&id).is_ok() {
+						diff.removed.push(id);
+					} else {
+						return Err(Error::UserDoesNotExist);
+					}
+				},
+				Proposal::Add { id, ref kp } => {
+					if kp.verify() {
+						let added = Member::new(id, kp.clone());
+
+						if new.roster.add(added.clone()).is_ok() {
+							diff.added.push(added);
+						} else {
+							return Err(Error::UserAlreadyExists);
+						}
+					} else {
+						return Err(Error::InvalidKeyPair);
+					}
+				}
+			};
+		};
+
+		Ok((new, diff))
 	}
 }
 
@@ -711,8 +750,17 @@ impl Group {
 struct Diff {
 	updated: Vec<Id>,
 	removed: Vec<Id>,
-	added: Vec<Member>, // a sender can propose any number of Deltas
-	                    // a receiver can have one Delta
+	added: Vec<Member>,
+}
+
+impl Diff {
+	pub fn new() -> Self {
+		Self {
+			updated: Vec::new(),
+			removed: Vec::new(),
+			added: Vec::new(),
+		}
+	}
 }
 
 impl Group {

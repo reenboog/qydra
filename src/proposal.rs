@@ -9,9 +9,9 @@ use crate::{
 // TODO: serialize in order to be framed
 #[derive(Clone)]
 pub enum Proposal {
-	Add { id: Id, kp: KeyPackage },
-	Remove { id: Id },
 	Update { kp: KeyPackage }, // id as well? TODO: introduce `proactive` updates to consume other people's prekeys
+	Remove { id: Id },
+	Add { id: Id, kp: KeyPackage },
 }
 
 // Recovery: No need for a proposal, because the assumption is that group members no longer share the same state.
