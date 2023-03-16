@@ -15,7 +15,7 @@ pub struct Roster {
 
 pub enum Error {
 	AlreadyExists,
-	DoesNotExist
+	DoesNotExist,
 }
 
 impl Roster {
@@ -32,7 +32,9 @@ impl Roster {
 	}
 
 	pub fn remove(&mut self, id: &Id) -> Result<(), Error> {
-		self.members.remove(id).map_or(Err(Error::DoesNotExist), |_| Ok(()))
+		self.members
+			.remove(id)
+			.map_or(Err(Error::DoesNotExist), |_| Ok(()))
 	}
 
 	pub fn contains(&self, id: &Id) -> bool {
@@ -146,13 +148,13 @@ mod tests {
 			},
 		));
 
-		_ = roster
-			.add(Member::new(Id([99u8; 32]),
-				KeyPackage {
-					ek: [22u8; 768],
-					svk: PublicKey::new([33u8; 2592]),
-					signature: Signature::new([77u8; 4595]),
-				},
+		_ = roster.add(Member::new(
+			Id([99u8; 32]),
+			KeyPackage {
+				ek: [22u8; 768],
+				svk: PublicKey::new([33u8; 2592]),
+				signature: Signature::new([77u8; 4595]),
+			},
 		));
 
 		assert!(roster.remove(&Id([12u8; 32])).is_ok());

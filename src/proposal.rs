@@ -6,11 +6,10 @@ use crate::{
 	key_package::KeyPackage,
 };
 
-// TODO: serialize in order to be framed
 #[derive(Clone)]
 pub enum Proposal {
-	Update { kp: KeyPackage }, // id as well? TODO: introduce `proactive` updates to consume other people's prekeys
 	Remove { id: Id },
+	Update { kp: KeyPackage },
 	Add { id: Id, kp: KeyPackage },
 }
 
@@ -75,14 +74,12 @@ pub struct FramedProposal {
 	pub nonce: Nonce, // mixed with the mac_key to prevent key reuse
 }
 
-// groupCount is what I have now; it is not sent – it's just signed!
-// P is delta to apply
-
-// 0: groupCont ← (G.groupid, G.epoch, G.memberHash, G.confTransHash)
-// 1: propCont ← (G.groupCont(), G.id, ‘proposal’, P) // This is macked and signed
-// 2: sig ← SIG.Sign(ppSIG, G.ssk, propCont)
-// 3: membTag ← MAC.TagGen(G.membKey, (propCont, sig))
-// 4: return (G.groupid, G.epoch, G.id, ‘proposal’, P, sig, membTag)
+// a validated by a group proposal
+pub struct UnframedProposal {
+	pub id: Id,
+	pub sender: Id,
+	pub prop: Proposal,
+}
 
 impl FramedProposal {
 	pub fn new(

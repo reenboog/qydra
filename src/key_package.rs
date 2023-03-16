@@ -88,7 +88,7 @@ mod tests {
 	use super::KeyPackage;
 	use crate::{
 		dilithium::{self, Signature},
-		hash::{Hashable, Hash},
+		hash::{Hash, Hashable},
 	};
 	use ilum;
 	use sha2::{Digest, Sha256};

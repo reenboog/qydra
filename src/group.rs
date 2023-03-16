@@ -12,7 +12,7 @@ use crate::key_schedule::{
 	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
 };
 use crate::member::Member;
-use crate::proposal::{self, FramedProposal, Proposal};
+use crate::proposal::{self, FramedProposal, Proposal, UnframedProposal};
 use crate::roster::Roster;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
@@ -32,7 +32,7 @@ pub enum Error {
 	// a commit referring to unknown proposals is being processed; retry policy could be applied
 	PropsMismatch,
 	// we're trying to commit while being removed in one of its proposals; abort, someone else should commit instead
-	SelfRemoveNotAllowed,
+	CommitsByEvicteeNotAllowed,
 	// corresponds to either KeyPairMismatch or BadAesMaterial; in general, should never happen
 	HpkeDecryptFailed,
 	// the supplied key pair failed to verify: pk-sk was either not signed with ssk or something else
@@ -56,7 +56,9 @@ pub enum Error {
 	// whatever was encapsulated by the inviter is of unexpected form
 	WrongJoinerSecretSize,
 	// I received my own update, validation passed, but no prestored (ssk, dk) pair was found which makes no sense
-	NoPendingUpdateFound
+	NoPendingUpdateFound,
+	// validation resulted with an empty proposal list
+	EmptyPropsList,
 }
 
 // TODO: include Config?
@@ -208,7 +210,7 @@ impl Group {
 	}
 
 	/// verifies commit's guid, epoch & signature
-	fn unframe_commit(
+	fn verify_unframe_commit(
 		&self,
 		fc: &FramedCommit,
 	) -> Result<(Id, Commit, Signature, hmac::Digest), Error> {
@@ -241,8 +243,16 @@ impl Group {
 		}
 	}
 
-	// returns (user_id, Proposal)
-	fn unframe_proposal(&self, fp: &FramedProposal) -> Result<(Id, Proposal), Error> {
+	fn verify_unframe_proposals(&self, fps: &[FramedProposal]) -> Vec<UnframedProposal> {
+		// keep only authenticated props: verify guid, epoch, signature, mac and roster
+		// if we were to fail in case of an invalid proposal, a malicious party (including the backend) could
+		// sabotage the group by sending garbage; instead filtering is to be used
+		fps.iter()
+			.filter_map(|fp| self.verify_unframe_proposal(fp).ok())
+			.collect::<Vec<UnframedProposal>>()
+	}
+
+	fn verify_unframe_proposal(&self, fp: &FramedProposal) -> Result<UnframedProposal, Error> {
 		if let Some(sender) = self.roster.get(&fp.sender) {
 			if fp.guid != self.uid {
 				return Err(Error::WrongGroup);
@@ -267,7 +277,11 @@ impl Group {
 				return Err(Error::InvalidMac);
 			}
 
-			return Ok((fp.sender, fp.prop.clone()));
+			return Ok(UnframedProposal {
+				id: fp.id(),
+				sender: fp.sender,
+				prop: fp.prop.clone(),
+			});
 		} else {
 			return Err(Error::UnknownSender);
 		}
@@ -285,9 +299,6 @@ impl Group {
 		(package, kp.sk)
 	}
 
-	// TODO: return a new group state instead of using mut?
-	// apply proposals: get the new state + diffs + filter bad proposals
-	// these should be filtered/validated and ordered by an outer layer
 	pub fn commit(
 		&mut self,
 		fps: &[FramedProposal],
@@ -299,7 +310,7 @@ impl Group {
 		),
 		Error,
 	> {
-		// apply previously stored-filtered-validated proposals and get (new_group, diff { updated, removed, added })
+		// apply previously stored proposals and get (new_group, diff { updated, removed, added })
 		let (mut new, diff) = self.apply_proposals(fps)?;
 
 		// REVIEW: this should be checked by a higher level in the first place
@@ -314,10 +325,12 @@ impl Group {
 		// in a multi-device setting, it is also sufficient to check whether the proposal is sent from "me",
 		// which should be done by a higher leve as well
 		if diff.removed.contains(&self.user_id) {
-			return Err(Error::SelfRemoveNotAllowed);
+			// no action required at this point; if you're actually evicted, there'll be a corresponding commit for that
+			// in practice though, there won't be detached remove proposals: if you're proposed for remove, the sender is to send
+			// a compound message containing both the proposal and the commit
+
+			return Err(Error::CommitsByEvicteeNotAllowed);
 		}
-		// suggested by design, but self-updates should actually be fine
-		// assert(!changes.updates.contans(self.user_id))
 
 		// these will get Welcome
 		let to_welcome = diff.added;
@@ -396,7 +409,7 @@ impl Group {
 		fps: &[FramedProposal],
 	) -> Result<Option<Group>, Error> {
 		// verify group, epoch, membership and the signature first
-		let (sender, commit, sig, conf_tag) = self.unframe_commit(fc)?;
+		let (sender, commit, sig, conf_tag) = self.verify_unframe_commit(fc)?;
 
 		if sender == self.user_id {
 			// this is one of my own commits, so just return its state and apply it
@@ -430,7 +443,8 @@ impl Group {
 
 			if diff.removed.contains(&sender) {
 				// committers can't remove themselves
-				return Err(Error::SelfRemoveNotAllowed);
+				// when a self-evictee is committing – the whole commit should be ignored
+				return Err(Error::CommitsByEvicteeNotAllowed);
 			}
 
 			// TODO: my ctd should be nil, if I get here;
@@ -685,64 +699,90 @@ impl Group {
 	}
 
 	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
-	// TODO: introduce a dedicated type instead of [FramedProposal]
 	fn apply_proposals(&self, fps: &[FramedProposal]) -> Result<(Group, Diff), Error> {
-		// sort and filter first?
 		let mut new = self.next();
 		let mut diff = Diff::new();
-		// updates, removes, adds
-		// FIXME: add these checks?
-		// in the spec:
 
-		// TODO: rather apply props and don't do anything – they should be already validated
-		for idx in 0..fps.len() {
-			let fp = fps.get(idx).unwrap();
-			let (sender, prop) = self.unframe_proposal(fp)?; // check sig, mac, roster.contains
+		// verify guid, epoch, signature, mac & sender's membership
+		let mut fps = self.verify_unframe_proposals(fps);
+
+		// enforce (remove -> update -> add) order
+		use std::cmp::Ordering;
+		use Proposal::*;
+
+		fps.sort_by(|a, b| match (a.prop.clone(), b.prop.clone()) {
+			(Remove { .. }, Remove { .. }) => a.sender.cmp(&b.sender),
+			(Remove { .. }, _) => Ordering::Less,
+			(Update { kp: ref kp_a }, Update { kp: ref kp_b }) => kp_a.hash().cmp(&kp_b.hash()),
+			(Update { .. }, Add { .. }) => Ordering::Less,
+			(Add { .. }, Add { .. }) => a.sender.cmp(&b.sender),
+			_ => Ordering::Greater,
+		});
+
+		for fp in fps {
+			let UnframedProposal {
+				id: fp_id,
+				sender,
+				prop,
+			} = fp;
 
 			match prop {
-				Proposal::Update { ref kp } => {
-					if kp.verify() {
+				Remove { id } => {
+					// cross deletions are allowed, but keep track of who's already deleted
+					if new.roster.remove(&id).is_ok() {
+						diff.removed.push(id);
+					}
+				}
+				Update { ref kp } => {
+					// removed peers can't update
+					// update only once (update proposals are sorted by kp)
+					if !diff.removed.contains(&sender)
+						&& !diff.updated.contains(&sender)
+						&& kp.verify()
+					{
 						new.roster.set(&sender, kp);
 
-						// this is my own update, so set ssk & dk as well
+						// this is my own update, it is verified, so set ssk & dk as well
 						if sender == new.user_id {
-							if let Some(pu) = self.pending_updates.get(&fp.id()) {
+							if let Some(pu) = self.pending_updates.get(&fp_id) {
 								new.ssk = pu.ssk.clone();
 								new.dk = pu.dk;
 							} else {
+								// this breaks the whole state: it seems to be my own update, kp is validated, sig & mac are ok,
+								// but I can't find this update's private keys which means I won't be able to decrypt upcoming commits; re-init required
 								return Err(Error::NoPendingUpdateFound);
 							}
 						}
-					} else {
-						return Err(Error::InvalidKeyPair);
-					}
 
-					diff.updated.push(sender);
-				},
-				Proposal::Remove { id } => {
-					if new.roster.remove(&id).is_ok() {
-						diff.removed.push(id);
+						diff.updated.push(sender);
 					} else {
-						return Err(Error::UserDoesNotExist);
+						// just ignore this kp
+						continue;
 					}
-				},
-				Proposal::Add { id, ref kp } => {
-					if kp.verify() {
+				}
+				Add { id, ref kp } => {
+					// removed peers can't invite
+					// do not add, if added
+					// ignore if the key pair is invalid
+					if !diff.removed.contains(&sender) && !new.roster.contains(&id) && kp.verify() {
 						let added = Member::new(id, kp.clone());
 
-						if new.roster.add(added.clone()).is_ok() {
-							diff.added.push(added);
-						} else {
-							return Err(Error::UserAlreadyExists);
-						}
+						_ = new.roster.add(added.clone());
+						diff.added.push(added);
 					} else {
-						return Err(Error::InvalidKeyPair);
+						// ignore this kp
+						continue;
 					}
 				}
 			};
-		};
+		}
 
-		Ok((new, diff))
+		if diff.removed.is_empty() && diff.updated.is_empty() && diff.added.is_empty() {
+			// an empty list does not generate new state, so throw
+			Err(Error::EmptyPropsList)
+		} else {
+			Ok((new, diff))
+		}
 	}
 }
 
@@ -808,6 +848,11 @@ mod tests {
 
 	#[test]
 	fn test_frame_unframe_proposal() {}
+
+	#[test]
+	fn test_verify_unframe_proposals() {
+		//
+	}
 
 	#[test]
 	fn test_apply_proposals() {
