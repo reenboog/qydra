@@ -33,11 +33,12 @@ pub struct LeafCount(u32);
 pub enum Error {
 	NodeCountNotOdd,
 	LeafIdxNotOddInNodeSpace,
+	NoRootForEmptyTree,
 }
 
 impl LeafCount {
 	// rounds leaf count to the closest power of two, ie to the size of a "full" tree
-	pub fn full(lc: &LeafCount) -> LeafCount {
+	pub fn full(lc: LeafCount) -> LeafCount {
 		let mut nodes = 1;
 
 		while nodes < lc.0 {
@@ -65,6 +66,7 @@ impl TryFrom<NodeCount> for LeafCount {
 }
 
 // describes leaf index in the local (among leaves only) leaf space, eg [0, 1, 2, 3..]
+#[derive(Clone, Copy)]
 pub struct LeafIndex(u32);
 
 // FIXME: to I need this actually?
@@ -79,23 +81,10 @@ impl TryFrom<NodeIndex> for LeafIndex {
 		}
 	}
 }
-// bool operator<(const LeafIndex other) const { return val < other.val; }
-// bool operator<(const LeafCount other) const { return val < other.val; }
-// describes node index in the global node space
-#[derive(PartialEq)]
-pub struct NodeIndex(u32);
-// bool operator<(const NodeIndex other) const { return val < other.val; }
-// bool operator<(const NodeCount other) const { return val < other.val; }
-
-impl From<&LeafIndex> for NodeIndex {
-	fn from(li: &LeafIndex) -> Self {
-		Self(li.0 * 2)
-	}
-}
 
 impl LeafIndex {
-	pub fn ancestor(&self, other: &LeafIndex) -> NodeIndex {
-		let mut ln = NodeIndex::from(self);
+	pub fn ancestor(&self, other: LeafIndex) -> NodeIndex {
+		let mut ln = NodeIndex::from(*self);
 		let mut rn = NodeIndex::from(other);
 
 		if ln == rn {
@@ -112,6 +101,30 @@ impl LeafIndex {
 		let stop = 1 << u8::from(k - 1);
 
 		NodeIndex(pref + (stop - 1))
+	}
+}
+
+// describes node index in the global node space
+#[derive(PartialEq, Debug)]
+pub struct NodeIndex(u32);
+
+impl From<LeafIndex> for NodeIndex {
+	fn from(li: LeafIndex) -> Self {
+		Self(li.0 * 2)
+	}
+}
+
+impl NodeIndex {
+	pub fn root(lc: LeafCount) -> Result<NodeIndex, Error> {
+		if lc.0 == 0 {
+			Err(Error::NoRootForEmptyTree)
+		} else {
+			Ok(NodeIndex((1 << log2(NodeCount::from(lc).0)) - 1))
+		}
+	}
+
+	pub fn is_leaf(&self) -> bool {
+		self.0 % 2 == 0
 	}
 }
 
@@ -177,18 +190,18 @@ mod tests {
 
 	#[test]
 	fn test_leaf_count_full() {
-		assert_eq!(LeafCount::full(&LeafCount(0)).0, 1);
-		assert_eq!(LeafCount::full(&LeafCount(1)).0, 1);
-		assert_eq!(LeafCount::full(&LeafCount(2)).0, 2);
-		assert_eq!(LeafCount::full(&LeafCount(3)).0, 4);
-		assert_eq!(LeafCount::full(&LeafCount(4)).0, 4);
-		assert_eq!(LeafCount::full(&LeafCount(5)).0, 8);
-		assert_eq!(LeafCount::full(&LeafCount(6)).0, 8);
-		assert_eq!(LeafCount::full(&LeafCount(7)).0, 8);
-		assert_eq!(LeafCount::full(&LeafCount(8)).0, 8);
-		assert_eq!(LeafCount::full(&LeafCount(9)).0, 16);
-		assert_eq!(LeafCount::full(&LeafCount(100)).0, 128);
-		assert_eq!(LeafCount::full(&LeafCount(1000)).0, 1024);
+		assert_eq!(LeafCount::full(LeafCount(0)).0, 1);
+		assert_eq!(LeafCount::full(LeafCount(1)).0, 1);
+		assert_eq!(LeafCount::full(LeafCount(2)).0, 2);
+		assert_eq!(LeafCount::full(LeafCount(3)).0, 4);
+		assert_eq!(LeafCount::full(LeafCount(4)).0, 4);
+		assert_eq!(LeafCount::full(LeafCount(5)).0, 8);
+		assert_eq!(LeafCount::full(LeafCount(6)).0, 8);
+		assert_eq!(LeafCount::full(LeafCount(7)).0, 8);
+		assert_eq!(LeafCount::full(LeafCount(8)).0, 8);
+		assert_eq!(LeafCount::full(LeafCount(9)).0, 16);
+		assert_eq!(LeafCount::full(LeafCount(100)).0, 128);
+		assert_eq!(LeafCount::full(LeafCount(1000)).0, 1024);
 	}
 
 	#[test]
@@ -231,7 +244,32 @@ mod tests {
 		];
 
 		solutions.into_iter().for_each(|(l, r, a)| {
-			assert_eq!(LeafIndex(l).ancestor(&LeafIndex(r)).0, a);
+			assert_eq!(LeafIndex(l).ancestor(LeafIndex(r)).0, a);
 		});
+	}
+
+	#[test]
+	#[rustfmt::skip]
+	fn test_root() {
+		let solutions = vec![
+			(1u32, 0u32), (2, 1), (3, 3), (4, 3), (5, 7), (6, 7), (7, 7), (8, 7), (9, 15), (10, 15), (11, 15), (12, 15), (13, 15), (14, 15), (15, 15), (16, 15)
+		];
+
+		solutions.into_iter().for_each(|(lc, r )| {
+			assert_eq!(NodeIndex::root(LeafCount(lc)).ok(), Some(NodeIndex(r)));
+		});
+
+		assert_eq!(NodeIndex::root(LeafCount(0)).err(), Some(Error::NoRootForEmptyTree));
+	}
+
+	#[test]
+	fn test_is_leaf() {
+		(0..1000)
+			.filter(|i| i % 2 == 0)
+			.for_each(|i| assert!(NodeIndex(i).is_leaf()));
+
+		(0..1000)
+			.filter(|i| i % 2 != 0)
+			.for_each(|i| assert!(!NodeIndex(i).is_leaf()));
 	}
 }
