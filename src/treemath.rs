@@ -164,6 +164,12 @@ impl NodeIndex {
 			NodeIndex(self.0 ^ (0x03 << (self.level() - 1)))
 		}
 	}
+
+	pub fn parent(&self) -> NodeIndex {
+		let k = self.level();
+
+		NodeIndex((self.0 | (0x01 << k)) & !(0x01 << (k + 1)))
+	}
 }
 
 #[cfg(test)]
@@ -382,6 +388,17 @@ mod tests {
 
 		solutions.into_iter().enumerate().for_each(|(idx, v)| {
 			assert_eq!(NodeIndex(idx as u32).right().0, v);
+		});
+	}
+
+	#[test]
+	fn test_parent() {
+		let solutions = vec![
+			1, 3, 1, 7, 5, 3, 5, 15, 9, 11, 9, 7, 13, 11, 13, 31, 17, 19, 17, 23, 21,
+		];
+
+		solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			assert_eq!(NodeIndex(idx as u32).parent().0, v);
 		});
 	}
 }
