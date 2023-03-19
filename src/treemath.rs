@@ -34,6 +34,7 @@ pub enum Error {
 	NodeCountNotOdd,
 	LeafIdxNotOddInNodeSpace,
 	NoRootForEmptyTree,
+	NodeIsNotBelowSpecifiedAncestor
 }
 
 impl LeafCount {
@@ -141,7 +142,7 @@ impl NodeIndex {
 	}
 
 	// whether self is in a subtree of other
-	pub fn is_in_subtree(&self, other: NodeIndex) -> bool {
+	pub fn is_in_subtree(&self, other: &NodeIndex) -> bool {
 		// if other == self?
 		let lx = self.level();
 		let ly = other.level();
@@ -169,6 +170,25 @@ impl NodeIndex {
 		let k = self.level();
 
 		NodeIndex((self.0 | (0x01 << k)) & !(0x01 << (k + 1)))
+	}
+
+	fn sibling_for(&self, ancestor: &NodeIndex) -> Result<NodeIndex, Error> {
+		if !self.is_in_subtree(ancestor) {
+			Err(Error::NodeIsNotBelowSpecifiedAncestor)
+		} else {
+			let l = ancestor.left();
+			let r = ancestor.right();
+
+			if self.is_in_subtree(&l) {
+				Ok(r)
+			} else {
+				Ok(l)
+			}
+		}
+	}
+
+	pub fn sibling(&self) -> NodeIndex {
+		self.sibling_for(&self.parent()).unwrap()
 	}
 }
 
@@ -364,7 +384,7 @@ mod tests {
 
 		for i in 0..=20 {
 			for j in 0..20 {
-				assert_eq!(NodeIndex(i).is_in_subtree(NodeIndex(j)), solutions.contains(&(i, j)));
+				assert_eq!(NodeIndex(i).is_in_subtree(&NodeIndex(j)), solutions.contains(&(i, j)));
 			}
 		}
 	}
@@ -399,6 +419,23 @@ mod tests {
 
 		solutions.into_iter().enumerate().for_each(|(idx, v)| {
 			assert_eq!(NodeIndex(idx as u32).parent().0, v);
+		});
+	}
+
+	#[test]
+	fn test_sibling() {
+		//                                              X
+		//                      X
+		//          X                       X                       X
+		//    X           X           X           X           X
+		// X     X     X     X     X     X     X     X     X     X     X
+		// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+		let solutions = vec![
+			2, 5, 0, 11, 6, 1, 4, 23, 10, 13, 8, 3, 14, 9, 12, 47, 18, 21, 16, 27, 22,
+		];
+
+		solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			assert_eq!(NodeIndex(idx as u32).sibling().0, v);
 		});
 	}
 }
