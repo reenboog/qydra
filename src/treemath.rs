@@ -105,7 +105,7 @@ impl LeafIndex {
 }
 
 // describes node index in the global node space
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub struct NodeIndex(u32);
 
 impl From<LeafIndex> for NodeIndex {
@@ -141,12 +141,28 @@ impl NodeIndex {
 	}
 
 	// whether self is in a subtree of other
-	fn is_in_subtree(&self, other: NodeIndex) -> bool {
+	pub fn is_in_subtree(&self, other: NodeIndex) -> bool {
 		// if other == self?
 		let lx = self.level();
 		let ly = other.level();
 
 		lx <= ly && (self.0 >> (ly + 1) == other.0 >> (ly + 1))
+	}
+
+	pub fn left(&self) -> NodeIndex {
+		if self.is_leaf() {
+			*self
+		} else {
+			NodeIndex(self.0 ^ (0x01 << (self.level() - 1)))
+		}
+	}
+
+	pub fn right(&self) -> NodeIndex {
+		if self.is_leaf() {
+			*self
+		} else {
+			NodeIndex(self.0 ^ (0x03 << (self.level() - 1)))
+		}
 	}
 }
 
@@ -345,5 +361,27 @@ mod tests {
 				assert_eq!(NodeIndex(i).is_in_subtree(NodeIndex(j)), solutions.contains(&(i, j)));
 			}
 		}
+	}
+
+	#[test]
+	fn test_left() {
+		let solutions = vec![
+			0, 0, 2, 1, 4, 4, 6, 3, 8, 8, 10, 9, 12, 12, 14, 7, 16, 16, 18, 17, 20,
+		];
+
+		solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			assert_eq!(NodeIndex(idx as u32).left().0, v);
+		});
+	}
+
+	#[test]
+	fn test_right() {
+		let solutions = vec![
+			0, 2, 2, 5, 4, 6, 6, 11, 8, 10, 10, 13, 12, 14, 14, 23, 16, 18, 18, 21, 20,
+		];
+
+		solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			assert_eq!(NodeIndex(idx as u32).right().0, v);
+		});
 	}
 }
