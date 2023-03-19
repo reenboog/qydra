@@ -126,6 +126,19 @@ impl NodeIndex {
 	pub fn is_leaf(&self) -> bool {
 		self.0 % 2 == 0
 	}
+
+	fn level(&self) -> u32 {
+		if self.0 % 2 == 0 {
+			0
+		} else {
+			let mut k = 0;
+			while (self.0 >> k) % 2 == 1 {
+				k += 1;
+			}
+
+			k
+		}
+	}
 }
 
 #[cfg(test)]
@@ -271,5 +284,16 @@ mod tests {
 		(0..1000)
 			.filter(|i| i % 2 != 0)
 			.for_each(|i| assert!(!NodeIndex(i).is_leaf()));
+	}
+
+	#[test]
+	fn test_level() {
+		let solutions = vec![
+			0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0,
+		];
+
+		solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			assert_eq!(NodeIndex(idx as u32).level(), v);
+		});
 	}
 }
