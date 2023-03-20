@@ -86,27 +86,6 @@ impl TryFrom<NodeIndex> for LeafIndex {
 
 impl LeafIndex {
 	pub fn ancestor(&self, other: LeafIndex) -> NodeIndex {
-		    // // Handle cases where one is an ancestor of the other
-				// const lx = level(x) + 1;
-				// const ly = level(y) + 1;
-				// if (lx <= ly && x>>ly == y>>ly) {
-				// 		return y;
-				// } else if (ly <= lx && x>>lx == y>>lx) {
-				// 		return x;
-				// }
-		
-				// // Handle other cases
-				// let xn = x;
-				// let yn = y;
-				// let k = 0;
-				// while (xn != yn) {
-				// 		xn >>= 1;
-				// 		yn >>= 1;
-				// 		k += 1;
-				// }
-				// return (xn << k) + (1 << (k-1)) - 1;
-
-		// what if one is an ancestor of another?
 		let mut ln = NodeIndex::from(*self);
 		let mut rn = NodeIndex::from(other);
 
@@ -120,6 +99,7 @@ impl LeafIndex {
 			rn.0 >>= 1;
 			k += 1;
 		}
+
 		let pref = ln.0 << k;
 		let stop = 1 << u8::from(k - 1);
 
