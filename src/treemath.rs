@@ -12,6 +12,7 @@ fn log2(x: u32) -> usize {
 	k - 1
 }
 
+#[derive(Debug, PartialEq)]
 pub struct NodeCount(u32);
 
 // answers "given N leaves, how many nodes would this tree have?"
@@ -26,7 +27,7 @@ impl From<LeafCount> for NodeCount {
 	}
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct LeafCount(u32);
 
 #[derive(Debug, PartialEq)]
@@ -34,7 +35,8 @@ pub enum Error {
 	NodeCountNotOdd,
 	LeafIdxNotOddInNodeSpace,
 	NoRootForEmptyTree,
-	NodeIsNotBelowSpecifiedAncestor
+	NodeNotBelowSpecifiedAncestor,
+	NodeOutOfRange { n: NodeIndex, r: NodeCount },
 }
 
 impl LeafCount {
@@ -174,7 +176,7 @@ impl NodeIndex {
 
 	fn sibling_for(&self, ancestor: &NodeIndex) -> Result<NodeIndex, Error> {
 		if !self.is_in_subtree(ancestor) {
-			Err(Error::NodeIsNotBelowSpecifiedAncestor)
+			Err(Error::NodeNotBelowSpecifiedAncestor)
 		} else {
 			let l = ancestor.left();
 			let r = ancestor.right();
@@ -189,6 +191,36 @@ impl NodeIndex {
 
 	pub fn sibling(&self) -> NodeIndex {
 		self.sibling_for(&self.parent()).unwrap()
+	}
+
+	// should this be for LeafIndex instead?
+	pub fn dirpath(&self, lc: LeafCount) -> Result<Vec<NodeIndex>, Error> {
+		let r = Self::root(lc)?;
+
+		if *self == r {
+			Ok(Vec::new())
+		} else {
+			let nc = NodeCount::from(lc.clone());
+
+			if nc.0 <= self.0 {
+				Err(Error::NodeOutOfRange { n: *self, r: nc })
+			} else {
+				let mut dp = Vec::new();
+				let mut p = self.parent();
+
+				while p != r {
+					dp.push(p);
+					p = p.parent();
+				}
+
+				// include the root except in a one-member tree
+				if *self != r {
+					dp.push(p);
+				}
+
+				Ok(dp)
+			}
+		}
 	}
 }
 
@@ -219,6 +251,13 @@ mod tests {
 
 	#[test]
 	fn test_node_count_from_leaf_count() {
+		//                                              X
+		//                      X
+		//          X                       X                       X
+		//    X           X           X           X           X
+		// X     X     X     X     X     X     X     X     X     X     X
+		// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20			node index
+		// 0     1     2     3     4     5     6     7     8     9    10			leaf index
 		assert_eq!(NodeCount::from(LeafCount(0)).0, 0);
 		assert_eq!(NodeCount::from(LeafCount(1)).0, 1);
 		assert_eq!(NodeCount::from(LeafCount(2)).0, 3);
@@ -226,6 +265,7 @@ mod tests {
 		assert_eq!(NodeCount::from(LeafCount(4)).0, 7);
 		assert_eq!(NodeCount::from(LeafCount(5)).0, 9);
 		assert_eq!(NodeCount::from(LeafCount(6)).0, 11);
+		assert_eq!(NodeCount::from(LeafCount(9)).0, 17);
 	}
 
 	#[test]
@@ -315,6 +355,7 @@ mod tests {
 	#[test]
 	#[rustfmt::skip]
 	fn test_root() {
+		// TODO: check for 1 leaf
 		let solutions = vec![
 			(1u32, 0u32), (2, 1), (3, 3), (4, 3), (5, 7), (6, 7), (7, 7), (8, 7), (9, 15), (10, 15), (11, 15), (12, 15), (13, 15), (14, 15), (15, 15), (16, 15)
 		];
@@ -436,6 +477,117 @@ mod tests {
 
 		solutions.into_iter().enumerate().for_each(|(idx, v)| {
 			assert_eq!(NodeIndex(idx as u32).sibling().0, v);
+		});
+	}
+
+	#[test]
+	#[rustfmt::skip]
+	fn test_dirpath() {
+		let solutions = vec![
+			// idx 0, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Ok(vec![]), Ok(vec![1u32]), Ok(vec![1, 3]), Ok(vec![1, 3]), 
+				Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7, 15]),
+				Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]),
+			],
+			// idx 1, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(1), r: NodeCount(1) }), 
+				Ok(vec![]), Ok(vec![3]), Ok(vec![3]), Ok(vec![3, 7]), Ok(vec![3, 7]), Ok(vec![3, 7]), Ok(vec![3, 7]),
+				Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]),
+			],
+			// idx 2, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(2), r: NodeCount(1) }), 
+				Ok(vec![1]), Ok(vec![1, 3]), Ok(vec![1, 3]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]),
+				Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]),
+			],
+			// idx 3, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(3), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(3), r: NodeCount(3) }), Ok(vec![]), Ok(vec![]), Ok(vec![7]),
+				Ok(vec![7]), Ok(vec![7]), Ok(vec![7]), Ok(vec![7, 15]), Ok(vec![7, 15]), Ok(vec![7, 15]), 
+			],
+			// idx 4, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(4), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(4), r: NodeCount(3) }), Ok(vec![5, 3]), Ok(vec![5, 3]),
+				Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), 
+			],
+			// idx 5, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(5) }),
+				Ok(vec![3]), Ok(vec![3, 7]), Ok(vec![3, 7]),Ok(vec![3, 7]),Ok(vec![3, 7]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]),
+			],
+			// idx 6, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(5) }),
+				Ok(vec![5, 3]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7, 15]),
+				Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), 
+			],
+			// idx 7, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(5) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(7) }), Ok(vec![]), Ok(vec![]), Ok(vec![]),
+				Ok(vec![]), Ok(vec![15]), Ok(vec![15]), Ok(vec![15]),
+			],
+			// idx 8, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(5) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(7) }), Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7]),
+				Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7, 15]), Ok(vec![9, 11, 7, 15]), Ok(vec![9, 11, 7, 15]),
+			],
+			// idx 9, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(1) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(5) }),
+				Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(7) }), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(9) }),
+				Ok(vec![11, 7]), Ok(vec![11, 7]), Ok(vec![11, 7]), Ok(vec![11, 7, 15]), Ok(vec![11, 7, 15]), Ok(vec![11, 7, 15]),
+			],
+			// idx 10, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(10), r: NodeCount(1)})
+			],
+			// idx 11, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(11), r: NodeCount(1)})
+			],
+			// idx 12, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(12), r: NodeCount(1)})
+			],
+			// idx 13, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(13), r: NodeCount(1)})
+			],
+			// idx 14, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(14), r: NodeCount(1)})
+			],
+			// idx 15, leaves 0-1
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(15), r: NodeCount(1)})
+			],
+			// idx 16, leaves 0-11
+			vec![
+				Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(1)}),
+				Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(3)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(5)}),
+				Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(7)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(9)}),
+				Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(11)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(13)}),
+				Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(15)}), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), 
+			],
+		];
+		solutions.into_iter().enumerate().for_each(|(i, s)| {
+			s.into_iter().enumerate().for_each(|(lc, s)| {
+				assert_eq!(
+					NodeIndex(i as u32).dirpath(LeafCount(lc as u32)),
+					s.and_then(|v| v.iter().map(|ni| Ok(NodeIndex(*ni))).collect())
+				);
+			});
 		});
 	}
 }
