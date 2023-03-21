@@ -1,6 +1,3 @@
-pub(crate) const MAX_TREE_SIZE: u32 = 1 << 30;
-pub(crate) const MIN_TREE_SIZE: u32 = 1;
-
 fn log2(x: u32) -> usize {
 	if x == 0 {
 		return 0;
@@ -15,43 +12,31 @@ fn log2(x: u32) -> usize {
 #[derive(Debug, PartialEq)]
 pub struct NodeCount(u32);
 
-// "given N leaves, how many nodes would this tree have?"
+/// "given N leaves, how many nodes would this tree have?"
 impl From<LeafCount> for NodeCount {
 	fn from(lc: LeafCount) -> Self {
 		if lc.0 == 0 {
 			Self(0)
 		} else {
-			// TODO: use bit operations instead
-			Self(2 * (lc.0 - 1) + 1)
+			Self(((lc.0 - 1) << 1) + 1)
 		}
 	}
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub struct LeafCount(u32);
+// a tree of size 1 is a one-leaf tree without intermediate nodes
+pub struct LeafCount(pub u32);
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
+	EmptyTree,
 	NodeCountNotOdd,
-	LeafIdxNotOddInNodeSpace,
+	LeafNotEvenInNodeSpace,
 	NoRootForEmptyTree,
-	NodeNotBelowSpecifiedAncestor,
+	LeafCantHaveChildren,
 	NodeOutOfRange { n: NodeIndex, r: NodeCount },
+	RootCantHaveParent,
 }
-
-// impl LeafCount {
-// 	// rounds leaf count to the closest power of two, ie to the size of a "full" tree
-// 	// TODO: probably not used
-// 	pub fn full(lc: LeafCount) -> LeafCount {
-// 		let mut nodes = 1;
-
-// 		while nodes < lc.0 {
-// 			nodes <<= 1;
-// 		}
-
-// 		LeafCount(nodes)
-// 	}
-// }
 
 // "given N nodes, how many leaves would such a tree have?"
 impl TryFrom<NodeCount> for LeafCount {
@@ -60,9 +45,10 @@ impl TryFrom<NodeCount> for LeafCount {
 	fn try_from(nc: NodeCount) -> Result<Self, Self::Error> {
 		if nc.0 == 0 {
 			Ok(Self(0))
-		} else if nc.0 % 2 == 0 {
+		} else if nc.0 & 1 == 0 {
 			Err(Error::NodeCountNotOdd)
 		} else {
+			// if nc == 1, it's a one-leaf tree (no intermediate nodes)
 			Ok(Self((nc.0 >> 1) + 1))
 		}
 	}
@@ -70,14 +56,14 @@ impl TryFrom<NodeCount> for LeafCount {
 
 // describes leaf index in the local (among leaves only) leaf space, eg [0, 1, 2, 3..]
 #[derive(Clone, Copy)]
-pub struct LeafIndex(u32);
+pub struct LeafIndex(pub u32);
 
 impl TryFrom<NodeIndex> for LeafIndex {
 	type Error = Error;
 
 	fn try_from(ni: NodeIndex) -> Result<Self, Self::Error> {
-		if ni.0 % 2 == 1 {
-			Err(Error::LeafIdxNotOddInNodeSpace)
+		if ni.0 & 1 == 1 {
+			Err(Error::LeafNotEvenInNodeSpace)
 		} else {
 			Ok(Self(ni.0 >> 1))
 		}
@@ -85,6 +71,7 @@ impl TryFrom<NodeIndex> for LeafIndex {
 }
 
 impl LeafIndex {
+	// can be implemented for NodeIndex actually, but not required for now
 	pub fn ancestor(&self, other: LeafIndex) -> NodeIndex {
 		let mut ln = NodeIndex::from(*self);
 		let mut rn = NodeIndex::from(other);
@@ -109,36 +96,34 @@ impl LeafIndex {
 
 // describes node index in the global node space
 #[derive(PartialEq, Debug, Clone, Copy)]
-pub struct NodeIndex(u32);
+pub struct NodeIndex(pub u32);
 
 impl From<LeafIndex> for NodeIndex {
 	fn from(li: LeafIndex) -> Self {
-		Self(li.0 * 2)
+		Self(li.0 << 1)
 	}
 }
 
 impl NodeIndex {
 	pub fn root(lc: LeafCount) -> Result<NodeIndex, Error> {
-		// const w = nodeWidth(n); // if 0 => 0
-    // return (1 << Math.floor(Math.log2(w))) - 1;
-
 		if lc.0 == 0 {
 			Err(Error::NoRootForEmptyTree)
 		} else {
+			// for a tree of size 1 (the tree is a leaf), root is the leaf itself = 0
 			Ok(NodeIndex((1 << log2(NodeCount::from(lc).0)) - 1))
 		}
 	}
 
 	pub fn is_leaf(&self) -> bool {
-		self.0 % 2 == 0
+		self.0 & 1 == 0
 	}
 
 	pub fn level(&self) -> u32 {
-		if self.0 & 0x01 == 0 {
+		if self.0 & 1 == 0 {
 			0
 		} else {
 			let mut k = 0;
-			while (self.0 >> k) & 0x01 == 1 {
+			while (self.0 >> k) & 1 == 1 {
 				k += 1;
 			}
 
@@ -146,100 +131,71 @@ impl NodeIndex {
 		}
 	}
 
-	// whether self is in a subtree of other
+	// whether self is in a subtree of other; true if self == other
 	pub fn is_in_subtree(&self, other: &NodeIndex) -> bool {
-		// if other == self?
 		let lx = self.level();
 		let ly = other.level();
 
 		lx <= ly && (self.0 >> (ly + 1) == other.0 >> (ly + 1))
 	}
 
-	pub fn left(&self) -> NodeIndex {
+	pub fn left(&self) -> Result<NodeIndex, Error> {
 		if self.is_leaf() {
-			// TODO: return None instead?
-			*self
+			Err(Error::LeafCantHaveChildren)
 		} else {
-			NodeIndex(self.0 ^ (0x01 << (self.level() - 1)))
+			Ok(NodeIndex(self.0 ^ (1 << (self.level() - 1))))
 		}
 	}
 
-	// respects incomplete tree topologies
-	pub fn right_for_group_size(&self, lc: LeafCount) -> NodeIndex {
+	pub fn right_for_group_size(&self, lc: LeafCount) -> Result<NodeIndex, Error> {
+		// TODO: reorder errors?
 		if self.is_leaf() {
-			*self
+			Err(Error::LeafCantHaveChildren)
 		} else {
-			// TODO: ensure lc is not too small (return Result)
-			let mut r = self.0 ^ (0x03 << (self.level() - 1));
-			while r >= NodeCount::from(lc).0 {
-				r = NodeIndex(r).left().0;
+			let nc = NodeCount::from(lc);
+
+			if nc.0 > self.0 {
+				let mut r = self.0 ^ (0x03 << (self.level() - 1));
+
+				while r >= NodeCount::from(lc).0 {
+					r = NodeIndex(r).left()?.0;
+				}
+
+				Ok(NodeIndex(r))
+			} else {
+				Err(Error::NodeOutOfRange { n: *self, r: nc })
 			}
-
-			NodeIndex(r)
 		}
 	}
 
-	// this depends on the leaves number as well
-	// works for complete trees only for now
-	// pub fn right(&self) -> NodeIndex {
-	// 	if self.is_leaf() {
-	// 		// TODO: return None instead?
-	// 		*self
-	// 	} else {
-	// 		NodeIndex(self.0 ^ (0x03 << (self.level() - 1)))
-	// 	}
-	// }
-
-	// WARNING: assumes the tree is always full (otherwise, should take has_sibling as a parameter)
 	// returns node's direct parent, if the subtree is complete (there's an ancestor)
 	fn immediate_parent(&self) -> NodeIndex {
 		let k = self.level();
 
-		NodeIndex((self.0 | (0x01 << k)) & !(0x01 << (k + 1)))
+		NodeIndex((self.0 | (1 << k)) & !(1 << (k + 1)))
 	}
 
-	// pub fn parent_step(&self) -> NodeIndex {
-	// 	let k = self.level();
-	//   let b = (self.0 >> (k + 1)) & 0x01;
-	// 	NodeIndex((self.0 | (0x01 << k)) ^ (b << (k + 1)))
-	// }
+	pub fn parent_for_group_size(&self, lc: LeafCount) -> Result<NodeIndex, Error> {
+		if *self == Self::root(lc)? {
+			Err(Error::RootCantHaveParent)
+		} else {
+			let nc = NodeCount::from(lc);
 
-	// TODO: return Result
-	pub fn parent_for_group_size(&self, lc: LeafCount) -> NodeIndex {
-		// if (x === root(n)) {
-		// 	throw new Error('root node has no parent');
-		// }
-		let mut p = self.immediate_parent();
-		while p.0 >= NodeCount::from(lc).0 {
-			p = p.immediate_parent();
+			if nc.0 > self.0 {
+				let mut p = self.immediate_parent();
+				while p.0 >= NodeCount::from(lc).0 {
+					p = p.immediate_parent();
+				}
+
+				Ok(p)
+			} else {
+				Err(Error::NodeOutOfRange { n: *self, r: nc })
+			}
 		}
-
-		p
 	}
 
-	// TODO: remove
-	// fn sibling_for_ancestor(&self, ancestor: &NodeIndex) -> Result<NodeIndex, Error> {
-	// 	if !self.is_in_subtree(ancestor) {
-	// 		Err(Error::NodeNotBelowSpecifiedAncestor)
-	// 	} else {
-	// 		let l = ancestor.left();
-	// 		let r = ancestor.right(); // respect tree size?
-
-	// 		if self.is_in_subtree(&l) {
-	// 			Ok(r)
-	// 		} else {
-	// 			Ok(l)
-	// 		}
-	// 	}
-	// }
-
-	// TODO: remove
-	// pub fn sibling(&self) -> NodeIndex {
-	// 	self.sibling_for_ancestor(&self.parent()).unwrap()
-	// }
-
-	pub fn sibling_for_group_size(&self, lc: LeafCount) -> NodeIndex {
-		let p = self.parent_for_group_size(lc);
+	pub fn sibling_for_group_size(&self, lc: LeafCount) -> Result<NodeIndex, Error> {
+		let p = self.parent_for_group_size(lc)?;
 
 		if self.0 < p.0 {
 			p.right_for_group_size(lc)
@@ -248,74 +204,30 @@ impl NodeIndex {
 		}
 	}
 
-	// FIXME: use me instead of dirpath()
-	// TODO: return Result?
-	pub fn dirpath_for_group_size(&self, lc: LeafCount) -> Vec<NodeIndex> {
+	pub fn dirpath_for_group_size(&self, lc: LeafCount) -> Result<Vec<NodeIndex>, Error> {
 		let mut x = *self;
-		let r = Self::root(lc).unwrap(); // TODO: handle errors
+		let r = Self::root(lc)?;
 		let mut dp = Vec::new();
 
 		while x != r {
-			x = x.parent_for_group_size(lc);
+			x = x.parent_for_group_size(lc)?;
 			dp.push(x);
 		}
 
-		dp
+		Ok(dp)
 	}
 
-	// TODO: remove
-	// should this be for LeafIndex instead?
-	// pub fn dirpath(&self, lc: LeafCount) -> Result<Vec<NodeIndex>, Error> {
-	// 	let r = Self::root(lc)?;
-
-	// 	if *self == r {
-	// 		Ok(Vec::new())
-	// 	} else {
-	// 		let nc = NodeCount::from(lc.clone());
-
-	// 		if nc.0 <= self.0 {
-	// 			Err(Error::NodeOutOfRange { n: *self, r: nc })
-	// 		} else {
-	// 			let mut dp = Vec::new();
-	// 			let mut p = self.immediate_parent(); // respect even/odd?
-
-	// 			while p != r {
-	// 				dp.push(p);
-	// 				p = p.immediate_parent();
-	// 			}
-
-	// 			// include the root except in a one-member tree
-	// 			if *self != r {
-	// 				dp.push(p);
-	// 			}
-
-	// 			Ok(dp)
-	// 		}
-	// 	}
-	// }
-
-// 	export function copath(x: number, n: number): number[] {
-//     if (x === root(n)) {
-//         return [];
-//     }
-
-//     const d = directPath(x, n);
-//     d.unshift(x);
-//     d.pop();
-//     return d.map(y => sibling(y, n));
-// }
-
-	// FIXME: use me
-	// TODO: return Result?
-	pub fn copath_for_group_size(&self, lc: LeafCount) -> Vec<NodeIndex> {
-		if *self == Self::root(lc).unwrap() {
-			vec![]
+	pub fn copath_for_group_size(&self, lc: LeafCount) -> Result<Vec<NodeIndex>, Error> {
+		if *self == Self::root(lc)? {
+			Ok(vec![])
 		} else {
-			let mut dp = self.dirpath_for_group_size(lc);
+			let mut dp = self.dirpath_for_group_size(lc)?;
 			dp.insert(0, *self);
 			dp.pop();
 
-			dp.into_iter().map(|idx| idx.sibling_for_group_size(lc)).collect()
+			dp.into_iter()
+				.map(|idx| idx.sibling_for_group_size(lc))
+				.collect()
 		}
 	}
 }
@@ -388,22 +300,6 @@ mod tests {
 		});
 	}
 
-	// #[test]
-	// fn test_leaf_count_full() {
-	// 	assert_eq!(LeafCount::full(LeafCount(0)).0, 1);
-	// 	assert_eq!(LeafCount::full(LeafCount(1)).0, 1);
-	// 	assert_eq!(LeafCount::full(LeafCount(2)).0, 2);
-	// 	assert_eq!(LeafCount::full(LeafCount(3)).0, 4);
-	// 	assert_eq!(LeafCount::full(LeafCount(4)).0, 4);
-	// 	assert_eq!(LeafCount::full(LeafCount(5)).0, 8);
-	// 	assert_eq!(LeafCount::full(LeafCount(6)).0, 8);
-	// 	assert_eq!(LeafCount::full(LeafCount(7)).0, 8);
-	// 	assert_eq!(LeafCount::full(LeafCount(8)).0, 8);
-	// 	assert_eq!(LeafCount::full(LeafCount(9)).0, 16);
-	// 	assert_eq!(LeafCount::full(LeafCount(100)).0, 128);
-	// 	assert_eq!(LeafCount::full(LeafCount(1000)).0, 1024);
-	// }
-
 	#[test]
 	fn test_leaf_index_from_node_index() {
 		(0..100).for_each(|i| {
@@ -453,9 +349,8 @@ mod tests {
 	#[test]
 	#[rustfmt::skip]
 	fn test_root() {
-		// TODO: check for 1 leaf
 		let solutions = vec![
-			(1u32, 0u32), (2, 1), (3, 3), (4, 3), (5, 7), (6, 7), (7, 7), (8, 7), (9, 15), (10, 15), (11, 15), (12, 15), (13, 15), (14, 15), (15, 15), (16, 15)
+			(1, 0), (2, 1), (3, 3), (4, 3), (5, 7), (6, 7), (7, 7), (8, 7), (9, 15), (10, 15), (11, 15), (12, 15), (13, 15), (14, 15), (15, 15), (16, 15)
 		];
 
 		solutions.into_iter().for_each(|(lc, r )| {
@@ -530,25 +425,21 @@ mod tests {
 
 	#[test]
 	fn test_left() {
-		let solutions = vec![
-			0, 0, 2, 1, 4, 4, 6, 3, 8, 8, 10, 9, 12, 12, 14, 7, 16, 16, 18, 17, 20,
+		let odd_solutions = vec![
+			0, 1, 4, 3, 8, 9, 12, 7, 16, 17,
 		];
 
-		solutions.into_iter().enumerate().for_each(|(idx, v)| {
-			assert_eq!(NodeIndex(idx as u32).left().0, v);
+		odd_solutions.into_iter().enumerate().for_each(|(idx, v)| {
+			let left = NodeIndex(idx as u32 * 2 + 1).left().map(|op| op.0);
+			assert_eq!(left, Ok(v));
+		});
+
+		(0..1000).filter(|i| i % 2 == 0).into_iter().for_each(|idx| {
+			let left = NodeIndex(idx as u32).left();
+
+			assert_eq!(left, Err(Error::LeafCantHaveChildren));
 		});
 	}
-
-	// #[test]
-	// fn test_right() {
-	// 	let solutions = vec![
-	// 		0, 2, 2, 5, 4, 6, 6, 11, 8, 10, 10, 13, 12, 14, 14, 23, 16, 18, 18, 21, 20,
-	// 	];
-
-	// 	solutions.into_iter().enumerate().for_each(|(idx, v)| {
-	// 		assert_eq!(NodeIndex(idx as u32).right().0, v);
-	// 	});
-	// }
 
 	#[test]
 	fn test_right_for_group_size() {
@@ -561,33 +452,46 @@ mod tests {
 
 		// TODO: test other cases
 
-		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(3)).0, 4);
-		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(4)).0, 5);
-		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(5)).0, 8);
-		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(6)).0, 9);
-		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(7)).0, 11);
-		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(8)).0, 11);
-		assert_eq!(NodeIndex(11).right_for_group_size(LeafCount(7)).0, 12);
-		assert_eq!(NodeIndex(11).right_for_group_size(LeafCount(8)).0, 13);
-		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(9)).0, 16);
-		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(10)).0, 17);
-		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(11)).0, 19);
+		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(4)).err(), Some(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(7) }));
+
+		assert_eq!(NodeIndex(0).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
+		assert_eq!(NodeIndex(2).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
+		assert_eq!(NodeIndex(4).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
+
+		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(3)).map(|op| op.0), Ok(4));
+		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(4)).map(|op| op.0), Ok(5));
+		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(5)).map(|op| op.0), Ok(8));
+		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(6)).map(|op| op.0), Ok(9));
+		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(7)).map(|op| op.0), Ok(11));
+		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(8)).map(|op| op.0), Ok(11));
+		assert_eq!(NodeIndex(11).right_for_group_size(LeafCount(7)).map(|op| op.0), Ok(12));
+		assert_eq!(NodeIndex(11).right_for_group_size(LeafCount(8)).map(|op| op.0), Ok(13));
+		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(9)).map(|op| op.0), Ok(16));
+		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(10)).map(|op| op.0), Ok(17));
+		assert_eq!(NodeIndex(15).right_for_group_size(LeafCount(11)).map(|op| op.0), Ok(19));
 	}
 
 	#[test]
 	fn test_parent_for_group_size() {
-		assert_eq!(NodeIndex(0).parent_for_group_size(LeafCount(2)).0, 1);
-		assert_eq!(NodeIndex(2).parent_for_group_size(LeafCount(2)).0, 1);
-		assert_eq!(NodeIndex(4).parent_for_group_size(LeafCount(3)).0, 3);
-		assert_eq!(NodeIndex(4).parent_for_group_size(LeafCount(4)).0, 5);
-		assert_eq!(NodeIndex(8).parent_for_group_size(LeafCount(5)).0, 7);
-		assert_eq!(NodeIndex(8).parent_for_group_size(LeafCount(6)).0, 9);
-		assert_eq!(NodeIndex(9).parent_for_group_size(LeafCount(6)).0, 7);
-		assert_eq!(NodeIndex(9).parent_for_group_size(LeafCount(7)).0, 11);
-		assert_eq!(NodeIndex(12).parent_for_group_size(LeafCount(7)).0, 11);
-		assert_eq!(NodeIndex(12).parent_for_group_size(LeafCount(8)).0, 13);
-		assert_eq!(NodeIndex(16).parent_for_group_size(LeafCount(9)).0, 15);
-		assert_eq!(NodeIndex(16).parent_for_group_size(LeafCount(10)).0, 17);
+		// TODO: test other cases
+		assert_eq!(NodeIndex(0).parent_for_group_size(LeafCount(0)).err(), Some(Error::NoRootForEmptyTree));
+
+		assert_eq!(NodeIndex(7).parent_for_group_size(LeafCount(8)).err(), Some(Error::RootCantHaveParent));
+
+		assert_eq!(NodeIndex(7).parent_for_group_size(LeafCount(4)).err(), Some(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(7) }));
+
+		assert_eq!(NodeIndex(0).parent_for_group_size(LeafCount(2)).map(|op| op.0), Ok(1));
+		assert_eq!(NodeIndex(2).parent_for_group_size(LeafCount(2)).map(|op| op.0), Ok(1));
+		assert_eq!(NodeIndex(4).parent_for_group_size(LeafCount(3)).map(|op| op.0), Ok(3));
+		assert_eq!(NodeIndex(4).parent_for_group_size(LeafCount(4)).map(|op| op.0), Ok(5));
+		assert_eq!(NodeIndex(8).parent_for_group_size(LeafCount(5)).map(|op| op.0), Ok(7));
+		assert_eq!(NodeIndex(8).parent_for_group_size(LeafCount(6)).map(|op| op.0), Ok(9));
+		assert_eq!(NodeIndex(9).parent_for_group_size(LeafCount(6)).map(|op| op.0), Ok(7));
+		assert_eq!(NodeIndex(9).parent_for_group_size(LeafCount(7)).map(|op| op.0), Ok(11));
+		assert_eq!(NodeIndex(12).parent_for_group_size(LeafCount(7)).map(|op| op.0), Ok(11));
+		assert_eq!(NodeIndex(12).parent_for_group_size(LeafCount(8)).map(|op| op.0), Ok(13));
+		assert_eq!(NodeIndex(16).parent_for_group_size(LeafCount(9)).map(|op| op.0), Ok(15));
+		assert_eq!(NodeIndex(16).parent_for_group_size(LeafCount(10)).map(|op| op.0), Ok(17));
 	}
 
 	#[test]
@@ -603,42 +507,28 @@ mod tests {
 
 	#[test]
 	fn test_sibling_for_group_size() {
-		// TODO: test the whole tree including negative results & errors
-		assert_eq!(NodeIndex(0).sibling_for_group_size(LeafCount(2)).0, 2);
-		assert_eq!(NodeIndex(2).sibling_for_group_size(LeafCount(2)).0, 0);
-		assert_eq!(NodeIndex(4).sibling_for_group_size(LeafCount(3)).0, 1);
-		assert_eq!(NodeIndex(1).sibling_for_group_size(LeafCount(3)).0, 4);
-		assert_eq!(NodeIndex(4).sibling_for_group_size(LeafCount(4)).0, 6);
-		assert_eq!(NodeIndex(6).sibling_for_group_size(LeafCount(4)).0, 4);
-		assert_eq!(NodeIndex(3).sibling_for_group_size(LeafCount(5)).0, 8);
-		assert_eq!(NodeIndex(8).sibling_for_group_size(LeafCount(5)).0, 3);
-		assert_eq!(NodeIndex(8).sibling_for_group_size(LeafCount(6)).0, 10);
-		assert_eq!(NodeIndex(10).sibling_for_group_size(LeafCount(6)).0, 8);
-		assert_eq!(NodeIndex(16).sibling_for_group_size(LeafCount(9)).0, 7);
-		assert_eq!(NodeIndex(7).sibling_for_group_size(LeafCount(9)).0, 16);
-		assert_eq!(NodeIndex(17).sibling_for_group_size(LeafCount(10)).0, 7);
-		assert_eq!(NodeIndex(19).sibling_for_group_size(LeafCount(13)).0, 24);
+		// TODO: test other cases
+
+		assert_eq!(NodeIndex(0).sibling_for_group_size(LeafCount(2)).map(|op| op.0), Ok(2));
+		assert_eq!(NodeIndex(2).sibling_for_group_size(LeafCount(2)).map(|op| op.0), Ok(0));
+		assert_eq!(NodeIndex(4).sibling_for_group_size(LeafCount(3)).map(|op| op.0), Ok(1));
+		assert_eq!(NodeIndex(1).sibling_for_group_size(LeafCount(3)).map(|op| op.0), Ok(4));
+		assert_eq!(NodeIndex(4).sibling_for_group_size(LeafCount(4)).map(|op| op.0), Ok(6));
+		assert_eq!(NodeIndex(6).sibling_for_group_size(LeafCount(4)).map(|op| op.0), Ok(4));
+		assert_eq!(NodeIndex(3).sibling_for_group_size(LeafCount(5)).map(|op| op.0), Ok(8));
+		assert_eq!(NodeIndex(8).sibling_for_group_size(LeafCount(5)).map(|op| op.0), Ok(3));
+		assert_eq!(NodeIndex(8).sibling_for_group_size(LeafCount(6)).map(|op| op.0), Ok(10));
+		assert_eq!(NodeIndex(10).sibling_for_group_size(LeafCount(6)).map(|op| op.0), Ok(8));
+		assert_eq!(NodeIndex(16).sibling_for_group_size(LeafCount(9)).map(|op| op.0), Ok(7));
+		assert_eq!(NodeIndex(7).sibling_for_group_size(LeafCount(9)).map(|op| op.0), Ok(16));
+		assert_eq!(NodeIndex(17).sibling_for_group_size(LeafCount(10)).map(|op| op.0), Ok(7));
+		assert_eq!(NodeIndex(19).sibling_for_group_size(LeafCount(13)).map(|op| op.0), Ok(24));
 	}
-
-	// #[test]
-	// fn test_sibling() {
-	// 	//                                              X
-	// 	//                      X
-	// 	//          X                       X                       X
-	// 	//    X           X           X           X           X
-	// 	// X     X     X     X     X     X     X     X     X     X     X
-	// 	// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
-	// 	let solutions = vec![
-	// 		2, 5, 0, 11, 6, 1, 4, 23, 10, 13, 8, 3, 14, 9, 12, 47, 18, 21, 16, 27, 22,
-	// 	];
-
-	// 	solutions.into_iter().enumerate().for_each(|(idx, v)| {
-	// 		assert_eq!(NodeIndex(idx as u32).sibling().0, v);
-	// 	});
-	// }
 
 	#[test]
 	fn test_copath_for_group_size() {
+		// TODO: test other cases
+
 		let solutions = vec![
 			(0, 2, vec![2]),
 			(0, 4, vec![2, 5]),
@@ -657,6 +547,7 @@ mod tests {
 			assert_eq!(
 				NodeIndex(i)
 					.copath_for_group_size(LeafCount(sz))
+					.unwrap()
 					.into_iter()
 					.map(|idx| idx.0)
 					.collect::<Vec<u32>>(),
@@ -667,6 +558,9 @@ mod tests {
 
 	#[test]
 	fn test_dirpath_for_group_size() {
+		// TODO: test other cases
+		assert_eq!(NodeIndex(7).dirpath_for_group_size(LeafCount(8)).ok(), Some(vec![]));
+
 		let solutions = vec![
 			(0, 2, vec![1]),
 			(2, 2, vec![1]),
@@ -687,6 +581,7 @@ mod tests {
 			assert_eq!(
 				NodeIndex(i)
 					.dirpath_for_group_size(LeafCount(sz))
+					.unwrap()
 					.into_iter()
 					.map(|idx| idx.0)
 					.collect::<Vec<u32>>(),
@@ -694,115 +589,4 @@ mod tests {
 			);
 		});
 	}
-
-	// #[test]
-	// #[rustfmt::skip]
-	// fn test_dirpath() {
-	// 	let solutions = vec![
-	// 		// idx 0, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Ok(vec![]), Ok(vec![1u32]), Ok(vec![1, 3]), Ok(vec![1, 3]), 
-	// 			Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7, 15]),
-	// 			Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]),
-	// 		],
-	// 		// idx 1, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(1), r: NodeCount(1) }), 
-	// 			Ok(vec![]), Ok(vec![3]), Ok(vec![3]), Ok(vec![3, 7]), Ok(vec![3, 7]), Ok(vec![3, 7]), Ok(vec![3, 7]),
-	// 			Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]),
-	// 		],
-	// 		// idx 2, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(2), r: NodeCount(1) }), 
-	// 			Ok(vec![1]), Ok(vec![1, 3]), Ok(vec![1, 3]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7]),
-	// 			Ok(vec![1, 3, 7]), Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]), Ok(vec![1, 3, 7, 15]),
-	// 		],
-	// 		// idx 3, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(3), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(3), r: NodeCount(3) }), Ok(vec![]), Ok(vec![]), Ok(vec![7]),
-	// 			Ok(vec![7]), Ok(vec![7]), Ok(vec![7]), Ok(vec![7, 15]), Ok(vec![7, 15]), Ok(vec![7, 15]), 
-	// 		],
-	// 		// idx 4, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(4), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(4), r: NodeCount(3) }), Ok(vec![5, 3]), Ok(vec![5, 3]),
-	// 			Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), 
-	// 		],
-	// 		// idx 5, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(5), r: NodeCount(5) }),
-	// 			Ok(vec![3]), Ok(vec![3, 7]), Ok(vec![3, 7]),Ok(vec![3, 7]),Ok(vec![3, 7]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]), Ok(vec![3, 7, 15]),
-	// 		],
-	// 		// idx 6, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(6), r: NodeCount(5) }),
-	// 			Ok(vec![5, 3]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7]), Ok(vec![5, 3, 7, 15]),
-	// 			Ok(vec![5, 3, 7, 15]), Ok(vec![5, 3, 7, 15]), 
-	// 		],
-	// 		// idx 7, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(5) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(7) }), Ok(vec![]), Ok(vec![]), Ok(vec![]),
-	// 			Ok(vec![]), Ok(vec![15]), Ok(vec![15]), Ok(vec![15]),
-	// 		],
-	// 		// idx 8, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(5) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(7) }), Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7]),
-	// 			Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7]), Ok(vec![9, 11, 7, 15]), Ok(vec![9, 11, 7, 15]), Ok(vec![9, 11, 7, 15]),
-	// 		],
-	// 		// idx 9, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(1) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(3) }), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(5) }),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(7) }), Err(Error::NodeOutOfRange { n: NodeIndex(9), r: NodeCount(9) }),
-	// 			Ok(vec![11, 7]), Ok(vec![11, 7]), Ok(vec![11, 7]), Ok(vec![11, 7, 15]), Ok(vec![11, 7, 15]), Ok(vec![11, 7, 15]),
-	// 		],
-	// 		// idx 10, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(10), r: NodeCount(1)})
-	// 		],
-	// 		// idx 11, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(11), r: NodeCount(1)})
-	// 		],
-	// 		// idx 12, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(12), r: NodeCount(1)})
-	// 		],
-	// 		// idx 13, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(13), r: NodeCount(1)})
-	// 		],
-	// 		// idx 14, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(14), r: NodeCount(1)})
-	// 		],
-	// 		// idx 15, leaves 0-1
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(15), r: NodeCount(1)})
-	// 		],
-	// 		// idx 16, leaves 0-11
-	// 		vec![
-	// 			Err(Error::NoRootForEmptyTree), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(1)}),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(3)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(5)}),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(7)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(9)}),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(11)}), Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(13)}),
-	// 			Err(Error::NodeOutOfRange { n: NodeIndex(16), r: NodeCount(15)}), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), Ok(vec![17, 19, 23, 15]), 
-	// 		],
-	// 	];
-	// 	solutions.into_iter().enumerate().for_each(|(i, s)| {
-	// 		s.into_iter().enumerate().for_each(|(lc, s)| {
-	// 			assert_eq!(
-	// 				NodeIndex(i as u32).dirpath(LeafCount(lc as u32)),
-	// 				s.and_then(|v| v.iter().map(|ni| Ok(NodeIndex(*ni))).collect())
-	// 			);
-	// 		});
-	// 	});
-	// }
 }

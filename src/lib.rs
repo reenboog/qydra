@@ -16,6 +16,7 @@ pub mod proposal;
 pub mod public_key;
 pub mod roster;
 pub mod serializable;
+pub mod sym_ratchet;
 pub mod treemath;
 pub mod update;
 pub mod welcome;
