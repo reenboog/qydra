@@ -148,13 +148,12 @@ impl NodeIndex {
 	}
 
 	pub fn right_for_group_size(&self, lc: LeafCount) -> Result<NodeIndex, Error> {
-		// TODO: reorder errors?
-		if self.is_leaf() {
-			Err(Error::LeafCantHaveChildren)
-		} else {
-			let nc = NodeCount::from(lc);
+		let nc = NodeCount::from(lc);
 
-			if nc.0 > self.0 {
+		if nc.0 > self.0 {
+			if self.is_leaf() {
+				Err(Error::LeafCantHaveChildren)
+			} else {
 				let mut r = self.0 ^ (0x03 << (self.level() - 1));
 
 				while r >= NodeCount::from(lc).0 {
@@ -162,9 +161,9 @@ impl NodeIndex {
 				}
 
 				Ok(NodeIndex(r))
-			} else {
-				Err(Error::NodeOutOfRange { n: *self, r: nc })
 			}
+		} else {
+			Err(Error::NodeOutOfRange { n: *self, r: nc })
 		}
 	}
 
@@ -453,10 +452,14 @@ mod tests {
 		// TODO: test other cases
 
 		assert_eq!(NodeIndex(7).right_for_group_size(LeafCount(4)).err(), Some(Error::NodeOutOfRange { n: NodeIndex(7), r: NodeCount(7) }));
+		assert_eq!(NodeIndex(8).right_for_group_size(LeafCount(4)).err(), Some(Error::NodeOutOfRange { n: NodeIndex(8), r: NodeCount(7) }));
 
+		assert_eq!(NodeIndex(0).right_for_group_size(LeafCount(0)).err(), Some(Error::NodeOutOfRange { n: NodeIndex(0), r: NodeCount(0) }));
+		assert_eq!(NodeIndex(0).right_for_group_size(LeafCount(1)).err(), Some(Error::LeafCantHaveChildren));
 		assert_eq!(NodeIndex(0).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
 		assert_eq!(NodeIndex(2).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
 		assert_eq!(NodeIndex(4).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
+		assert_eq!(NodeIndex(6).right_for_group_size(LeafCount(4)).err(), Some(Error::LeafCantHaveChildren));
 
 		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(3)).map(|op| op.0), Ok(4));
 		assert_eq!(NodeIndex(3).right_for_group_size(LeafCount(4)).map(|op| op.0), Ok(5));
