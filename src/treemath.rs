@@ -424,23 +424,25 @@ mod tests {
 
 	#[test]
 	fn test_left() {
-		let odd_solutions = vec![
-			0, 1, 4, 3, 8, 9, 12, 7, 16, 17,
-		];
+		let odd_solutions = vec![0, 1, 4, 3, 8, 9, 12, 7, 16, 17];
 
 		odd_solutions.into_iter().enumerate().for_each(|(idx, v)| {
 			let left = NodeIndex(idx as u32 * 2 + 1).left().map(|op| op.0);
 			assert_eq!(left, Ok(v));
 		});
 
-		(0..1000).filter(|i| i % 2 == 0).into_iter().for_each(|idx| {
-			let left = NodeIndex(idx as u32).left();
+		(0..1000)
+			.filter(|i| i % 2 == 0)
+			.into_iter()
+			.for_each(|idx| {
+				let left = NodeIndex(idx as u32).left();
 
-			assert_eq!(left, Err(Error::LeafCantHaveChildren));
-		});
+				assert_eq!(left, Err(Error::LeafCantHaveChildren));
+			});
 	}
 
 	#[test]
+	#[rustfmt::skip]
 	fn test_right_for_group_size() {
 		//                                              X
 		//                      X
@@ -475,6 +477,7 @@ mod tests {
 	}
 
 	#[test]
+	#[rustfmt::skip]
 	fn test_parent_for_group_size() {
 		// TODO: test other cases
 		assert_eq!(NodeIndex(0).parent_for_group_size(LeafCount(0)).err(), Some(Error::NoRootForEmptyTree));
@@ -509,6 +512,7 @@ mod tests {
 	}
 
 	#[test]
+	#[rustfmt::skip]
 	fn test_sibling_for_group_size() {
 		// TODO: test other cases
 
@@ -562,7 +566,10 @@ mod tests {
 	#[test]
 	fn test_dirpath_for_group_size() {
 		// TODO: test other cases
-		assert_eq!(NodeIndex(7).dirpath_for_group_size(LeafCount(8)).ok(), Some(vec![]));
+		assert_eq!(
+			NodeIndex(7).dirpath_for_group_size(LeafCount(8)).ok(),
+			Some(vec![])
+		);
 
 		let solutions = vec![
 			(0, 2, vec![1]),
