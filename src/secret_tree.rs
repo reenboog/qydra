@@ -34,7 +34,7 @@ impl From<treemath::Error> for Error {
 pub struct SecretTree<Secret, KDF> {
 	pub group_size: LeafCount,
 	pub root: NodeIndex,
-	pub secrets: BTreeMap<u32, Secret>, // use NodeIndex as a key instead?
+	pub secrets: BTreeMap<NodeIndex, Secret>,
 	kdf: KDF,
 }
 
@@ -49,7 +49,7 @@ where
 		let root = treemath::NodeIndex::root(group_size)?;
 		let mut secrets = BTreeMap::new();
 
-		secrets.insert(root.0, root_secret);
+		secrets.insert(root, root_secret);
 
 		Ok(Self {
 			group_size,
@@ -69,7 +69,7 @@ where
 
 		while curr < dirpath.len() {
 			let idx = dirpath.get(curr).unwrap();
-			if self.secrets.get(&idx.0).is_some() {
+			if self.secrets.get(&idx).is_some() {
 				break;
 			} else {
 				curr += 1;
@@ -81,23 +81,23 @@ where
 		} else {
 			while curr > 0 {
 				let curr_node = dirpath.get(curr).unwrap();
-				let left = curr_node.left().unwrap(); // TODO: do not unwrap or check in advance?
-				let right = curr_node.right_for_group_size(self.group_size).unwrap(); // TODO: do not unwrap or check in advance
-				let secret = self.secrets.get(&curr_node.0).unwrap();
+				let left = curr_node.left().unwrap();
+				let right = curr_node.right_for_group_size(self.group_size).unwrap();
+				let secret = self.secrets.get(&curr_node).unwrap();
 
 				let left_secret = (self.kdf)(secret, left, b"left");
 				let right_secret = (self.kdf)(secret, right, b"right");
 
-				self.secrets.insert(left.0, left_secret);
-				self.secrets.insert(right.0, right_secret);
+				self.secrets.insert(left, left_secret);
+				self.secrets.insert(right, right_secret);
 
 				curr -= 1;
 			}
 
-			let out = *self.secrets.get(&sender.0).unwrap();
+			let out = *self.secrets.get(&sender).unwrap();
 
 			dirpath.into_iter().for_each(|idx| {
-				self.secrets.remove(&idx.0);
+				self.secrets.remove(&idx);
 			});
 
 			Ok(out)
@@ -122,7 +122,7 @@ impl HkdfTree {
 
 #[cfg(test)]
 mod tests {
-	use super::SecretTree;
+	use super::{SecretTree, HkdfTree};
 	use crate::{
 		secret_tree::Error,
 		treemath::{LeafCount, LeafIndex, NodeIndex},
@@ -130,8 +130,9 @@ mod tests {
 
 	#[test]
 	#[rustfmt::skip]
-	fn test_get() {
+	fn test_node_derivation_on_get() {
 		fn nokdf(_: &u32, idx: NodeIndex, _: &[u8]) -> u32 {
+			// don't derive a new secret, but just return this node's index
 			idx.0
 		}
 		//                                              X
@@ -172,7 +173,6 @@ mod tests {
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![]);
 		assert_eq!(s.get(LeafIndex(5)).err(), Some(Error::SecretHasBeenUsed { idx: LeafIndex(5) }));
 
-		////
 		let mut s = SecretTree::try_new(2, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(1)).ok(), Some(2));
@@ -182,19 +182,16 @@ mod tests {
 		assert_eq!(s.get(LeafIndex(0)).ok(), Some(0));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![]);
 
-		////
 		let mut s = SecretTree::try_new(1, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(0)).ok(), Some(0));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![]);
 		assert_eq!(s.get(LeafIndex(0)).err(), Some(Error::SecretHasBeenUsed { idx: LeafIndex(0) }));
 
-		////
 		let s = SecretTree::try_new(0, 0, nokdf);
 
 		assert!(s.is_err());
 
-		////
 		let mut s = SecretTree::try_new(5, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(1)).ok(), Some(2));
@@ -209,5 +206,34 @@ mod tests {
 
 		assert_eq!(s.get(LeafIndex(4)).ok(), Some(8));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![4]);
+	}
+
+	#[test]
+	fn test_hkdf_tree_ensures_unique_secrets_for_leafes() {
+		let rs = [42u8; 32];
+
+		let mut s = HkdfTree::try_new_for_root_secret(1, rs).unwrap();
+		// no need to derive anything when it's just one node
+		assert_eq!(s.get(LeafIndex(0)).ok(), Some(rs));
+
+		let mut s_one = HkdfTree::try_new_for_root_secret(5, rs).unwrap();
+		// derivation takes place
+		let n0_one = s_one.get(LeafIndex(0));
+		let n1_one = s_one.get(LeafIndex(1));
+		let n2_one = s_one.get(LeafIndex(2));
+
+		assert_ne!(n0_one, n1_one);
+		assert_ne!(n0_one, n2_one);
+		assert_ne!(n1_one, n2_one);
+		assert_ne!(n2_one.ok(), Some(rs));
+		assert_ne!(n1_one.ok(), Some(rs));
+		assert!(n0_one.is_ok());
+
+		// make sure changing the root secret changes the leaf secrets completely
+		let mut s_two = HkdfTree::try_new_for_root_secret(5, [41u8; 32]).unwrap();
+		// derivation takes place
+		let n0_two = s_two.get(LeafIndex(0));
+
+		assert_ne!(n0_one, n0_two);
 	}
 }

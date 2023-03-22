@@ -94,7 +94,7 @@ impl LeafIndex {
 }
 
 // describes node index in the global node space
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy, Eq, PartialOrd, Ord)]
 pub struct NodeIndex(pub u32);
 
 impl From<LeafIndex> for NodeIndex {
