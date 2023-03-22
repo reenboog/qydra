@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::treemath::{self, LeafCount, LeafIndex, NodeIndex};
+use crate::{
+	hash, hkdf, hmac,
+	treemath::{self, LeafCount, LeafIndex, NodeIndex},
+};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -27,24 +30,21 @@ impl From<treemath::Error> for Error {
 	}
 }
 
-pub struct Chain;
-
-// pub enum Secret {
-// 	// Node(Hash),
-// 	// Leaf(Chain),
-// }
-type Secret = u32;
-
 #[derive(Debug)]
-pub struct SecretTree {
+pub struct SecretTree<Secret, KDF> {
 	pub group_size: LeafCount,
 	pub root: NodeIndex,
 	pub secrets: BTreeMap<u32, Secret>, // use NodeIndex as a key instead?
+	kdf: KDF,
 }
 
-impl SecretTree {
-	// no empty tree allowed, hence Result
-	pub fn try_new(size: u32, root_secret: u32) -> Result<Self, Error> {
+impl<Secret, KDF> SecretTree<Secret, KDF>
+where
+	Secret: Copy,
+	KDF: Fn(&Secret, NodeIndex, &[u8]) -> Secret,
+{
+	// no empty tree allowed, therefore Result
+	pub fn try_new(size: u32, root_secret: Secret, kdf: KDF) -> Result<Self, Error> {
 		let group_size = LeafCount(size);
 		let root = treemath::NodeIndex::root(group_size)?;
 		let mut secrets = BTreeMap::new();
@@ -55,16 +55,11 @@ impl SecretTree {
 			group_size,
 			root,
 			secrets,
+			kdf,
 		})
 	}
 
 	pub fn get(&mut self, leaf: LeafIndex) -> Result<Secret, Error> {
-		//                                              X
-		//                      X
-		//          X                       X                       X
-		//    X           X           X           X           X
-		// X     X     X     X     X     X     X     X     X     X     X
-		// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
 		let sender = NodeIndex::from(leaf);
 		let mut dirpath = sender.dirpath_for_group_size(self.group_size)?;
 
@@ -90,8 +85,8 @@ impl SecretTree {
 				let right = curr_node.right_for_group_size(self.group_size).unwrap(); // TODO: do not unwrap or check in advance
 				let secret = self.secrets.get(&curr_node.0).unwrap();
 
-				let left_secret = left.0; // TODO: kdf-expand with secret^ instead; TODO: do not unwrap?
-				let right_secret = right.0; // TODO: kdf-expand with secret^ instead; TODO: do not unwrap?
+				let left_secret = (self.kdf)(secret, left, b"left");
+				let right_secret = (self.kdf)(secret, right, b"right");
 
 				self.secrets.insert(left.0, left_secret);
 				self.secrets.insert(right.0, right_secret);
@@ -110,24 +105,42 @@ impl SecretTree {
 	}
 }
 
+const HKDF_SALT: &[u8; hmac::Key::SIZE] = b"SecretTreeSecretTreeSecretTreeSe";
+
+fn hkdf(ikm: &hash::Hash, idx: NodeIndex, info: &[u8]) -> hash::Hash {
+	hkdf::Hkdf::from_ikm_salted(ikm, HKDF_SALT)
+		.expand::<{ hash::SIZE }>(&[info, &vec![idx.0 as u8]].concat())
+}
+
+type HkdfTree = SecretTree<hash::Hash, fn(&hash::Hash, NodeIndex, &[u8]) -> hash::Hash>;
+
+impl HkdfTree {
+	pub fn try_new_for_root_secret(size: u32, root_secret: hash::Hash) -> Result<Self, Error> {
+		Self::try_new(size, root_secret, hkdf)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::SecretTree;
 	use crate::{
 		sym_ratchet::Error,
-		treemath::{LeafCount, LeafIndex},
+		treemath::{LeafCount, LeafIndex, NodeIndex},
 	};
 
 	#[test]
 	#[rustfmt::skip]
 	fn test_get() {
+		fn nokdf(_: &u32, idx: NodeIndex, _: &[u8]) -> u32 {
+			idx.0
+		}
 		//                                              X
 		//                      X
 		//          X                       X                       X
 		//    X           X           X           X           X
 		// X     X     X     X     X     X     X     X     X     X     X
 		// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
-		let mut s = SecretTree::try_new(8, 0).unwrap();
+		let mut s = SecretTree::try_new(8, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(0)).ok(), Some(0));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![2, 5, 11]);
@@ -160,7 +173,7 @@ mod tests {
 		assert_eq!(s.get(LeafIndex(5)).err(), Some(Error::SecretHasBeenUsed { idx: LeafIndex(5) }));
 
 		////
-		let mut s = SecretTree::try_new(2, 0).unwrap();
+		let mut s = SecretTree::try_new(2, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(1)).ok(), Some(2));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![0]);
@@ -170,19 +183,19 @@ mod tests {
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![]);
 
 		////
-		let mut s = SecretTree::try_new(1, 0).unwrap();
+		let mut s = SecretTree::try_new(1, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(0)).ok(), Some(0));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![]);
 		assert_eq!(s.get(LeafIndex(0)).err(), Some(Error::SecretHasBeenUsed { idx: LeafIndex(0) }));
 
 		////
-		let s = SecretTree::try_new(0, 0);
+		let s = SecretTree::try_new(0, 0, nokdf);
 
 		assert!(s.is_err());
 
 		////
-		let mut s = SecretTree::try_new(5, 0).unwrap();
+		let mut s = SecretTree::try_new(5, 0, nokdf).unwrap();
 
 		assert_eq!(s.get(LeafIndex(1)).ok(), Some(2));
 		assert_eq!(s.secrets.values().cloned().collect::<Vec<u32>>(), vec![0, 5, 8]);
