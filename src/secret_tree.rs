@@ -124,7 +124,7 @@ impl HkdfTree {
 mod tests {
 	use super::SecretTree;
 	use crate::{
-		sym_ratchet::Error,
+		secret_tree::Error,
 		treemath::{LeafCount, LeafIndex, NodeIndex},
 	};
 
