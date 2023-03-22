@@ -10,7 +10,7 @@ fn log2(x: u32) -> usize {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct NodeCount(u32);
+pub struct NodeCount(pub u32);
 
 /// "given N leaves, how many nodes would this tree have?"
 impl From<LeafCount> for NodeCount {
@@ -29,7 +29,6 @@ pub struct LeafCount(pub u32);
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
-	EmptyTree,
 	NodeCountNotOdd,
 	LeafNotEvenInNodeSpace,
 	NoRootForEmptyTree,
@@ -55,7 +54,7 @@ impl TryFrom<NodeCount> for LeafCount {
 }
 
 // describes leaf index in the local (among leaves only) leaf space, eg [0, 1, 2, 3..]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LeafIndex(pub u32);
 
 impl TryFrom<NodeIndex> for LeafIndex {
@@ -572,6 +571,7 @@ mod tests {
 		);
 
 		let solutions = vec![
+			(0, 1, vec![]),
 			(0, 2, vec![1]),
 			(2, 2, vec![1]),
 			(4, 3, vec![3]),
