@@ -112,7 +112,7 @@ fn hkdf(ikm: &hash::Hash, idx: NodeIndex, info: &[u8]) -> hash::Hash {
 		.expand::<{ hash::SIZE }>(&[info, &vec![idx.0 as u8]].concat())
 }
 
-type HkdfTree = SecretTree<hash::Hash, fn(&hash::Hash, NodeIndex, &[u8]) -> hash::Hash>;
+pub type HkdfTree = SecretTree<hash::Hash, fn(&hash::Hash, NodeIndex, &[u8]) -> hash::Hash>;
 
 impl HkdfTree {
 	pub fn try_new_for_root_secret(size: u32, root_secret: hash::Hash) -> Result<Self, Error> {

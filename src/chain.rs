@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
-	KeyHasBeenUsed(u32),
+	KeyHasBeenUsed(u32), // generation key
 	TooManyKeysSkipped,
 }
 
@@ -147,6 +147,23 @@ mod tests {
 
 		assert!(ch.get(1).is_ok());
 		assert!(ch.get(1).is_err());
+	}
+
+	#[test]
+	fn test_no_key_skip_allowed() {
+		let mut ch = Chain::new([1u8; 32], 0);
+
+		// one by one (no skipping) is just fine
+		assert!(ch.get(0).is_ok());
+		assert!(ch.get(1).is_ok());
+		assert!(ch.get(2).is_ok());
+
+		// while skipping is not
+		assert!(ch.get(4).is_err());
+		assert!(ch.get(5).is_err());
+		
+		// and back to normal order
+		assert!(ch.get(3).is_ok());
 	}
 
 	#[test]

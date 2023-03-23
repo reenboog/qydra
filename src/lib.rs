@@ -1,5 +1,6 @@
 pub mod aes_gcm;
 pub mod chain;
+pub mod chain_tree;
 pub mod commit;
 pub mod dilithium;
 pub mod group;

@@ -54,7 +54,7 @@ impl TryFrom<NodeCount> for LeafCount {
 }
 
 // describes leaf index in the local (among leaves only) leaf space, eg [0, 1, 2, 3..]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(PartialEq, Debug, Clone, Copy, Eq, PartialOrd, Ord)]
 pub struct LeafIndex(pub u32);
 
 impl TryFrom<NodeIndex> for LeafIndex {
