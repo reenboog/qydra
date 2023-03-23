@@ -122,7 +122,7 @@ impl HkdfTree {
 
 #[cfg(test)]
 mod tests {
-	use super::{SecretTree, HkdfTree};
+	use super::{HkdfTree, SecretTree};
 	use crate::{
 		secret_tree::Error,
 		treemath::{LeafCount, LeafIndex, NodeIndex},

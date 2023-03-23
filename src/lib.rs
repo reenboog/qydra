@@ -1,4 +1,5 @@
 pub mod aes_gcm;
+pub mod chain;
 pub mod commit;
 pub mod dilithium;
 pub mod group;
@@ -15,8 +16,8 @@ pub mod private_key;
 pub mod proposal;
 pub mod public_key;
 pub mod roster;
-pub mod serializable;
 pub mod secret_tree;
+pub mod serializable;
 pub mod treemath;
 pub mod update;
 pub mod welcome;
