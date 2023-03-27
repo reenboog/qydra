@@ -17,7 +17,7 @@ pub type AppSecret = [u8; hash::SIZE];
 pub type MacSecret = [u8; hash::SIZE];
 // TODO: introduce ResumptinSecret for session reinitialization?
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct EpochSecrets {
 	pub init: InitSecret,
 	pub app: AppSecret,

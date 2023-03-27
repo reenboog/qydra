@@ -1,6 +1,6 @@
 use crate::{hash::Hashable, id::Id, key_package::KeyPackage};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Member {
 	pub id: Id,
 	pub kp: KeyPackage,

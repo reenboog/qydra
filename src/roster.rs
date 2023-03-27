@@ -7,7 +7,7 @@ use crate::{
 	member::Member,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Roster {
 	// order is important, hence BTreeMap instead of HashMap
 	members: BTreeMap<Id, Member>,

@@ -9,7 +9,7 @@ use crate::{
 // no life time is specified; by default, such keys are non expiring
 // no key scheme is specifid; a predefined set of keys is used instead
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct KeyPackage {
 	// TODO: do I need to pack this with id as well?
 	pub ek: ilum::PublicKey,

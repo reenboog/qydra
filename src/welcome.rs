@@ -8,6 +8,7 @@ use crate::{
 use ilum::Ctd;
 use sha2::{Digest, Sha256};
 
+#[derive(Clone)]
 pub struct WlcmCti {
 	pub info: Info,
 	pub cti: hpkencrypt::CmpdCti,
@@ -20,6 +21,7 @@ impl WlcmCti {
 	}
 }
 
+#[derive(Clone)]
 pub struct WlcmCtd {
 	pub user_id: Id,
 	pub key_id: Id,
@@ -36,6 +38,7 @@ impl WlcmCtd {
 	}
 }
 
+#[derive(Clone)]
 pub struct Info {
 	pub guid: Hash,
 	pub epoch: u64,

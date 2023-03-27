@@ -19,6 +19,7 @@ use crate::welcome::{self, WlcmCtd, WlcmCti};
 use crate::{dilithium, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
+#[derive(Debug)]
 pub enum Error {
 	WrongGroup,
 	WrongEpoch,
@@ -839,6 +840,9 @@ impl Group {
 
 #[cfg(test)]
 mod tests {
+	use crate::{id::Id, key_package::KeyPackage, dilithium};
+	use super::{Group, Owner};
+
 	#[test]
 	fn test_next() {
 		// pend_upd = []
@@ -861,8 +865,75 @@ mod tests {
 	}
 
 	#[test]
-	fn test_create_group() {
-		// TODO: implement
+	fn test_create_add_group() {
+		let seed = [12u8; 16];
+		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_skp = dilithium::KeyPair::generate();
+		let alice = Owner {
+			id: Id([1u8; 32]),
+			kp: KeyPackage::new(&alice_ekp.pk, &alice_skp.public, &alice_skp.private),
+			dk: alice_ekp.sk,
+			ssk: alice_skp.private,
+		};
+
+		let mut group = Group::create(seed, alice);
+
+		let bob_user_id = Id([34u8; 32]);
+		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_kp = KeyPackage::new(&bob_user_ekp.pk, &bob_user_skp.public, &bob_user_skp.private);
+		let add_bob_prop = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		// alice invite using her initial group
+		let (fc, ctds, wlcms) = group.commit(&[add_bob_prop.clone()]).unwrap();
+		
+		// and get alice_group
+		let alice_group = group.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_bob_prop]).unwrap().unwrap();
+
+		// bob joins
+		let mut bob_group = Group::join(&bob_user_id, &bob_user_kp, &bob_user_ekp.sk, &bob_user_skp.private, &seed, &wlcms.clone().unwrap().0, wlcms.unwrap().1.get(0).unwrap()).unwrap();
+
+		assert_eq!(alice_group.uid, bob_group.uid);
+		assert_eq!(alice_group.epoch, bob_group.epoch);
+		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(alice_group.roster, bob_group.roster);
+		assert_eq!(alice_group.pending_commits.len(), bob_group.pending_commits.len());
+		assert_eq!(alice_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(alice_group.secrets, bob_group.secrets);
+
+		let charlie_user_id = Id([56u8; 32]);
+		let charlie_user_ekp = ilum::gen_keypair(&seed);
+		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_kp = KeyPackage::new(&charlie_user_ekp.pk, &charlie_user_skp.public, &charlie_user_skp.private);
+		// bob proposes to add charlie
+		let add_charlie_prop = bob_group.propose_add(charlie_user_id, charlie_user_kp.clone()).unwrap();
+		// commits using his bob_group
+		let (fc, ctds, wlcms) = bob_group.commit(&[add_charlie_prop.clone()]).unwrap();
+		
+		// alices processes
+		let alice_group = alice_group.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_charlie_prop.clone()]).unwrap().unwrap();
+		// bob processes
+		let bob_group = bob_group.process(&fc, &ctds.get(1).unwrap().1.unwrap(), &[add_charlie_prop]).unwrap().unwrap();
+		// charlie joins
+		let charlie_group = Group::join(&charlie_user_id, &charlie_user_kp, &charlie_user_ekp.sk, &charlie_user_skp.private, &seed, &wlcms.clone().unwrap().0, wlcms.unwrap().1.get(0).unwrap()).unwrap();
+
+		assert_eq!(alice_group.uid, bob_group.uid);
+		assert_eq!(alice_group.epoch, bob_group.epoch);
+		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(alice_group.roster, bob_group.roster);
+		assert_eq!(alice_group.pending_commits.len(), bob_group.pending_commits.len());
+		assert_eq!(alice_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(alice_group.secrets, bob_group.secrets);
+
+		assert_eq!(charlie_group.uid, bob_group.uid);
+		assert_eq!(charlie_group.epoch, bob_group.epoch);
+		assert_eq!(charlie_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(charlie_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(charlie_group.roster, bob_group.roster);
+		assert_eq!(charlie_group.pending_commits.len(), bob_group.pending_commits.len());
+		assert_eq!(charlie_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(charlie_group.secrets, bob_group.secrets);
 	}
 
 	#[test]
