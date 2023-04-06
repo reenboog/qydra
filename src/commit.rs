@@ -16,7 +16,7 @@ pub struct PendingCommit {
 	pub proposals: Vec<Id>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Commit {
 	// committer new key package
 	pub kp: KeyPackage,

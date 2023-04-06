@@ -1,9 +1,9 @@
 include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
 use crate::{
-	commit, dilithium, id, key_package, member, proposal, roster,
+	aes_gcm, commit, dilithium, hpkencrypt, id, key_package, member, proposal, roster,
 	serializable::{Deserializable, Serializable},
-	welcome, hpkencrypt, aes_gcm,
+	welcome,
 };
 use prost::Message;
 
@@ -29,6 +29,7 @@ pub enum Error {
 	WrongCtiSize,
 	WrongIvSize,
 	BadCtiFormat,
+	BadCommitFormat,
 }
 
 // KeyPackage
@@ -333,10 +334,10 @@ impl TryFrom<CmpdCti> for hpkencrypt::CmpdCti {
 	type Error = Error;
 
 	fn try_from(val: CmpdCti) -> Result<Self, Self::Error> {
-		Ok(hpkencrypt::CmpdCti::new(
+		Ok(Self::new(
 			val.cti.try_into().or(Err(Error::WrongCtiSize))?,
 			aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
-			val.sym_ct
+			val.sym_ct,
 		))
 	}
 }
@@ -349,6 +350,54 @@ impl Deserializable for hpkencrypt::CmpdCti {
 		Self: Sized,
 	{
 		Self::try_from(CmpdCti::decode(buf).or(Err(Error::BadCtiFormat))?)
+	}
+}
+
+// Commit
+impl From<&commit::Commit> for Commit {
+	fn from(val: &commit::Commit) -> Self {
+		Self {
+			kp: (&val.kp).into(),
+			cti: (&val.cti).into(),
+			prop_ids: val
+				.prop_ids
+				.iter()
+				.map(|pid| pid.as_bytes().to_vec())
+				.collect(),
+		}
+	}
+}
+
+impl Serializable for commit::Commit {
+	fn serialize(&self) -> Vec<u8> {
+		Commit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Commit> for commit::Commit {
+	type Error = Error;
+
+	fn try_from(val: Commit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			kp: val.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
+			cti: val.cti.try_into().or(Err(Error::BadCtiFormat))?,
+			prop_ids: val
+				.prop_ids
+				.into_iter()
+				.map(|pid| Ok(id::Id(pid.try_into().or(Err(Error::WrongIdSize))?)))
+				.collect::<Result<Vec<id::Id>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for commit::Commit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Commit::decode(buf).or(Err(Error::BadCommitFormat))?)
 	}
 }
 
@@ -375,7 +424,7 @@ impl Deserializable for commit::FramedCommit {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		dilithium, hmac, id, key_package, member, proposal, roster, hpkencrypt, aes_gcm,
+		aes_gcm, commit, dilithium, hmac, hpkencrypt, id, key_package, member, proposal, roster,
 		serializable::{Deserializable, Serializable},
 	};
 
@@ -506,10 +555,37 @@ mod tests {
 
 	#[test]
 	fn test_cmpd_cti() {
-		let cti = hpkencrypt::CmpdCti::new([123u8; 704], aes_gcm::Iv([45u8; 12]), vec![1, 2, 3, 4, 5, 6, 7]);
+		let cti = hpkencrypt::CmpdCti::new(
+			[123u8; 704],
+			aes_gcm::Iv([45u8; 12]),
+			vec![1, 2, 3, 4, 5, 6, 7],
+		);
 		let serialized = cti.serialize();
 		let deserialized = hpkencrypt::CmpdCti::deserialize(&serialized);
 
 		assert_eq!(Ok(cti), deserialized);
+	}
+
+	#[test]
+	fn test_commit() {
+		let kp = key_package::KeyPackage {
+			ek: [56u8; 768],
+			svk: dilithium::PublicKey::new([78u8; 2592]),
+			signature: dilithium::Signature::new([90u8; 4595]),
+		};
+		let cti = hpkencrypt::CmpdCti::new(
+			[123u8; 704],
+			aes_gcm::Iv([45u8; 12]),
+			vec![1, 2, 3, 4, 5, 6, 7],
+		);
+		let commit = commit::Commit {
+			kp,
+			cti,
+			prop_ids: vec![id::Id([12u8; 32]), id::Id([34u8; 32])],
+		};
+		let serialized = commit.serialize();
+		let deserialized = commit::Commit::deserialize(&serialized);
+
+		assert_eq!(Ok(commit), deserialized);
 	}
 }
