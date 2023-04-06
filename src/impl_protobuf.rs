@@ -3,7 +3,7 @@ include!(concat!(env!("OUT_DIR"), "/main.rs"));
 use crate::{
 	commit, dilithium, id, key_package, member, proposal, roster,
 	serializable::{Deserializable, Serializable},
-	welcome,
+	welcome, hpkencrypt, aes_gcm,
 };
 use prost::Message;
 
@@ -26,6 +26,9 @@ pub enum Error {
 	WrongMacSize,
 	WrongNonceSize,
 	BadFramedProposalFormat,
+	WrongCtiSize,
+	WrongIvSize,
+	BadCtiFormat,
 }
 
 // KeyPackage
@@ -308,8 +311,48 @@ impl Deserializable for proposal::FramedProposal {
 		Self::try_from(FramedProposal::decode(buf).or(Err(Error::BadFramedProposalFormat))?)
 	}
 }
-// FramedCommit
 
+// CmpdCti
+impl From<&hpkencrypt::CmpdCti> for CmpdCti {
+	fn from(val: &hpkencrypt::CmpdCti) -> Self {
+		Self {
+			cti: val.cti.to_vec(),
+			iv: val.iv.as_bytes().to_vec(),
+			sym_ct: val.sym_ct.to_vec(),
+		}
+	}
+}
+
+impl Serializable for hpkencrypt::CmpdCti {
+	fn serialize(&self) -> Vec<u8> {
+		CmpdCti::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<CmpdCti> for hpkencrypt::CmpdCti {
+	type Error = Error;
+
+	fn try_from(val: CmpdCti) -> Result<Self, Self::Error> {
+		Ok(hpkencrypt::CmpdCti::new(
+			val.cti.try_into().or(Err(Error::WrongCtiSize))?,
+			aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
+			val.sym_ct
+		))
+	}
+}
+
+impl Deserializable for hpkencrypt::CmpdCti {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(CmpdCti::decode(buf).or(Err(Error::BadCtiFormat))?)
+	}
+}
+
+// FramedCommit
 impl Serializable for commit::FramedCommit {
 	fn serialize(&self) -> Vec<u8> {
 		todo!()
@@ -332,7 +375,7 @@ impl Deserializable for commit::FramedCommit {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		dilithium, hmac, id, key_package, member, proposal, roster,
+		dilithium, hmac, id, key_package, member, proposal, roster, hpkencrypt, aes_gcm,
 		serializable::{Deserializable, Serializable},
 	};
 
@@ -459,5 +502,14 @@ mod tests {
 		let deserialized = proposal::FramedProposal::deserialize(&serialized);
 
 		assert_eq!(Ok(fc), deserialized);
+	}
+
+	#[test]
+	fn test_cmpd_cti() {
+		let cti = hpkencrypt::CmpdCti::new([123u8; 704], aes_gcm::Iv([45u8; 12]), vec![1, 2, 3, 4, 5, 6, 7]);
+		let serialized = cti.serialize();
+		let deserialized = hpkencrypt::CmpdCti::deserialize(&serialized);
+
+		assert_eq!(Ok(cti), deserialized);
 	}
 }

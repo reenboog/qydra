@@ -61,11 +61,14 @@ message FramedProposal {
 	required bytes nonce = 7;
 }
 
-// pub struct Commit {
-// 	// committer new key package
-// 	pub kp: KeyPackage,
-// 	// key-independent, compound (multi-layered) encapsulation
-// 	pub cti: hpkencrypt::CmpdCti,
-// 	// proposal ids; order is important, so should be pre-sorted/validated
-// 	pub prop_ids: Vec<Id>,
-// }
+message CmpdCti {
+	required bytes cti = 1;
+	required bytes iv = 2;
+	required bytes sym_ct = 3;
+}
+
+message Commit {
+	required KeyPackage kp = 1;
+	required CmpdCti cti = 2;
+	repeated bytes prop_ids = 3;
+}

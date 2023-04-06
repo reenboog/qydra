@@ -304,7 +304,7 @@ impl Group {
 		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce); // TODO: do I need to use a SecretsTree instead? - rather yes
 		let mac = hmac::digest(&mac_key, &to_mac);
 
-		let fc = FramedProposal::new(
+		let fp = FramedProposal::new(
 			self.uid,
 			self.epoch,
 			self.user_id,
@@ -314,7 +314,7 @@ impl Group {
 			mac_nonce,
 		);
 
-		(fc.clone(), self.encrypt(fc, MsgType::Propose))
+		(fp.clone(), self.encrypt(fp, MsgType::Propose))
 	}
 
 	/// verifies commit's guid, epoch & signature
@@ -509,6 +509,7 @@ impl Group {
 			},
 		);
 
+		// TODO: encrypt fc and return alongside with framed_commit
 		Ok((framed_commit, ctds, welcomes))
 	}
 
