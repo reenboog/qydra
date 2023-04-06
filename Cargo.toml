@@ -22,3 +22,9 @@ ring = { version = "0.16.20" }
 # hashing
 sha2 = { version = "0.10" }
 hmac = { version = "0.12.1" }
+
+# protobuf
+prost = { version = "0.9" }
+
+[build-dependencies]
+prost-build = { version = "0.9" }

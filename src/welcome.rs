@@ -3,6 +3,7 @@ use crate::{
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt,
 	id::Id,
+	key_schedule::JoinerSecret,
 	roster::Roster,
 };
 use ilum::Ctd;
@@ -10,14 +11,13 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct WlcmCti {
-	pub info: Info,
 	pub cti: hpkencrypt::CmpdCti,
 	pub sig: Signature,
 }
 
 impl WlcmCti {
-	pub fn new(info: Info, cti: hpkencrypt::CmpdCti, sig: Signature) -> Self {
-		Self { info, cti, sig }
+	pub fn new(cti: hpkencrypt::CmpdCti, sig: Signature) -> Self {
+		Self { cti, sig }
 	}
 }
 
@@ -38,6 +38,7 @@ impl WlcmCtd {
 	}
 }
 
+// sent to each invitee hpke-encrypted
 #[derive(Clone)]
 pub struct Info {
 	pub guid: Hash,
@@ -46,6 +47,7 @@ pub struct Info {
 	pub conf_trans_hash: Hash,
 	pub conf_tag: hmac::Digest,
 	pub inviter: Id,
+	pub joiner: JoinerSecret,
 }
 
 impl Info {
@@ -56,6 +58,7 @@ impl Info {
 		conf_trans_hash: Hash,
 		conf_tag: hmac::Digest,
 		inviter: Id,
+		joiner: JoinerSecret,
 	) -> Self {
 		Self {
 			guid,
@@ -64,6 +67,7 @@ impl Info {
 			conf_trans_hash,
 			conf_tag,
 			inviter,
+			joiner,
 		}
 	}
 }
@@ -78,21 +82,10 @@ impl Hashable for Info {
 				&self.conf_trans_hash,
 				self.conf_tag.as_bytes(),
 				self.inviter.as_bytes(),
+				&self.joiner,
 			]
 			.concat(),
 		)
 		.into()
 	}
 }
-
-// should be encrypted with the recipient's public key at least
-// type WelcomeMessageI struct {
-// 	GroupInfo *GroupInfo
-// 	T         []byte
-// 	Sig       []byte
-// }
-
-// type WelcomeMessageD struct {
-// 	KpHash []byte
-// 	Ctd    []byte
-// }

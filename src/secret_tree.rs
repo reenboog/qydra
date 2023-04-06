@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use crate::{
 	hash, hkdf, hmac,
@@ -30,7 +30,7 @@ impl From<treemath::Error> for Error {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct SecretTree<Secret, KDF> {
 	pub group_size: LeafCount,
 	pub root: NodeIndex,
@@ -113,6 +113,24 @@ fn hkdf(ikm: &hash::Hash, idx: NodeIndex, info: &[u8]) -> hash::Hash {
 }
 
 pub type HkdfTree = SecretTree<hash::Hash, fn(&hash::Hash, NodeIndex, &[u8]) -> hash::Hash>;
+
+impl PartialEq for HkdfTree {
+	fn eq(&self, other: &Self) -> bool {
+		self.group_size == other.group_size
+			&& self.root == other.root
+			&& self.secrets == other.secrets
+	}
+}
+
+impl Debug for HkdfTree {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("SecretTree")
+			.field("group_size", &self.group_size)
+			.field("root", &self.root)
+			.field("secrets", &self.secrets)
+			.finish()
+	}
+}
 
 impl HkdfTree {
 	pub fn try_new_for_root_secret(size: u32, root_secret: hash::Hash) -> Result<Self, Error> {

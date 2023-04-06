@@ -20,12 +20,13 @@ pub enum Error {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub struct DetachedKey(hash::Hash);
+pub struct DetachedKey(pub hash::Hash);
 
 impl DetachedKey {
 	pub const SIZE: usize = 32;
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChainKey(hash::Hash);
 
 const HKDF_SALT: &[u8; hmac::Key::SIZE] = b"ChainChainChainChainChainChainCh";
@@ -40,8 +41,7 @@ impl ChainKey {
 	}
 }
 
-pub const MAX_SKIPPED_KEYS: u32 = 1000;
-
+#[derive(Clone, Debug, PartialEq)]
 pub struct Chain {
 	// to preserve FS, we should only store intermediate *detached keys*, not chain keys and
 	// and keep only the last chain key required to derive future message keys; from the detached keys
@@ -83,6 +83,12 @@ impl Chain {
 				Ok(self.skipped_keys.remove(&idx).unwrap())
 			}
 		}
+	}
+
+	pub fn get_next(&mut self) -> Result<(DetachedKey, u32), Error> {
+		let idx = self.next_idx;
+
+		Ok((self.get(idx)?, idx))
 	}
 
 	fn advance(&mut self) {
@@ -139,6 +145,20 @@ mod tests {
 	}
 
 	#[test]
+	fn test_get_next() {
+		let mut ch0 = Chain::new([1u8; 32], 3);
+		let mut ch1 = Chain::new([1u8; 32], 3);
+
+		let k2 = ch0.get(2).unwrap();
+		let k0 = ch0.get(0).unwrap();
+		let k1 = ch0.get(1).unwrap();
+
+		assert_eq!(ch1.get_next().unwrap().0, k0);
+		assert_eq!(ch1.get_next().unwrap().0, k1);
+		assert_eq!(ch1.get_next().unwrap().0, k2);
+	}
+
+	#[test]
 	fn test_err_on_key_reuse() {
 		let mut ch = Chain::new([1u8; 32], 3);
 
@@ -161,7 +181,7 @@ mod tests {
 		// while skipping is not
 		assert!(ch.get(4).is_err());
 		assert!(ch.get(5).is_err());
-		
+
 		// and back to normal order
 		assert!(ch.get(3).is_ok());
 	}

@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use crate::{
 	dilithium::{self, Signature},
 	hash::Hashable,
-	id::Id,
+	id::{Id, Identifiable},
 };
 
 // no life time is specified; by default, such keys are non expiring
@@ -77,8 +77,8 @@ impl Hashable for KeyPackage {
 	}
 }
 
-impl KeyPackage {
-	pub fn id(&self) -> Id {
+impl Identifiable for KeyPackage {
+	fn id(&self) -> Id {
 		Id(self.hash())
 	}
 }

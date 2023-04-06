@@ -10,9 +10,11 @@ use crate::{
 #[derive(Clone, PartialEq, Debug)]
 pub struct Roster {
 	// order is important, hence BTreeMap instead of HashMap
-	members: BTreeMap<Id, Member>,
+	// TODO: make private
+	pub(crate) members: BTreeMap<Id, Member>,
 }
 
+#[derive(Debug)]
 pub enum Error {
 	AlreadyExists,
 	DoesNotExist,
@@ -23,6 +25,21 @@ impl Roster {
 		Self {
 			members: BTreeMap::new(),
 		}
+	}
+
+	pub fn len(&self) -> u32 {
+		self.members.len() as u32
+	}
+
+	// returns idx of a member with id = id
+	pub fn idx(&self, id: Id) -> Result<u32, Error> {
+		Ok(self
+			.ids()
+			.iter()
+			.enumerate()
+			.find(|(_, i)| **i == id)
+			.map(|(idx, _)| idx)
+			.ok_or(Error::DoesNotExist)? as u32)
 	}
 
 	pub fn add(&mut self, member: Member) -> Result<(), Error> {

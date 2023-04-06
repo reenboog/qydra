@@ -10,3 +10,7 @@ impl Id {
 		&self.0
 	}
 }
+
+pub trait Identifiable {
+	fn id(&self) -> Id;
+}

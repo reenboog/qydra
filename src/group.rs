@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use ilum::*;
 use rand::Rng;
 
+use crate::ciphertext::{Ciphertext, MsgType};
 use crate::commit::{Commit, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
-use crate::id::Id;
+use crate::id::{Id, Identifiable};
 use crate::key_package::KeyPackage;
 use crate::key_schedule::{
 	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
@@ -14,9 +15,11 @@ use crate::key_schedule::{
 use crate::member::Member;
 use crate::proposal::{self, FramedProposal, Proposal, UnframedProposal};
 use crate::roster::Roster;
+use crate::serializable::{Deserializable, Serializable};
+use crate::treemath::LeafIndex;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
-use crate::{dilithium, hmac, hpkencrypt, key_schedule};
+use crate::{aes_gcm, dilithium, hkdf, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -55,11 +58,17 @@ pub enum Error {
 	// key advertised in the welcome message does not match with what's used for the roster
 	InitKeyMismatch,
 	// whatever was encapsulated by the inviter is of unexpected form
-	WrongJoinerSecretSize,
+	WrongWelcomeFormat,
 	// I received my own update, validation passed, but no prestored (ssk, dk) pair was found which makes no sense
 	NoPendingUpdateFound,
 	// validation resulted with an empty proposal list
 	EmptyPropsList,
+	// this key was either used, or too many were skipped
+	FailedToDeriveChainTreeKey,
+	// failed to aes-decrypt a hs (prop, commit) or app message
+	BadAesMaterial,
+	// failed to deserialize content
+	BadContentFormat,
 }
 
 // TODO: include Config?
@@ -113,7 +122,7 @@ impl Group {
 		let joiner_secret = rand::thread_rng().gen();
 		let conf_trans_hash = hash::empty();
 		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash);
-		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner_secret);
+		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner_secret, 1);
 		let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
 		let interim_trans_hash = Self::interim_trans_hash(&conf_trans_hash, conf_tag.as_bytes());
 
@@ -154,8 +163,12 @@ impl Group {
 		Self::derive_ctx(&self.uid, self.epoch, &self.roster, &self.conf_trans_hash)
 	}
 
-	// TODO: this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
-	pub fn propose_add(&self, id: Id, kp: KeyPackage) -> Result<FramedProposal, Error> {
+	// this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
+	pub fn propose_add(
+		&mut self,
+		id: Id,
+		kp: KeyPackage,
+	) -> Result<(FramedProposal, Ciphertext), Error> {
 		if self.roster.contains(&id) {
 			// TODO: should we verify kp here as well?
 			Err(Error::UserAlreadyExists)
@@ -164,7 +177,8 @@ impl Group {
 		}
 	}
 
-	pub fn propose_remove(&self, id: &Id) -> Result<FramedProposal, Error> {
+	// TODO: use a type instead of (FramedProposal, Ciphertext)
+	pub fn propose_remove(&mut self, id: &Id) -> Result<(FramedProposal, Ciphertext), Error> {
 		if !self.roster.contains(id) {
 			Err(Error::UserDoesNotExist)
 		} else {
@@ -172,18 +186,109 @@ impl Group {
 		}
 	}
 
-	pub fn propose_update(&mut self) -> FramedProposal {
+	pub fn propose_update(&mut self) -> (FramedProposal, Ciphertext) {
 		let (kp, sk) = self.gen_kp();
-		let fp = self.frame_proposal(Proposal::Update { kp });
+		let (fp, ct) = self.frame_proposal(Proposal::Update { kp });
 		let pu = PendingUpdate::new(sk, self.ssk.clone()); // TODO: make update ssk as well
 
 		self.pending_updates.insert(fp.id(), pu);
 
-		fp
+		(fp, ct)
+	}
+
+	fn encrypt<T>(&mut self, pt: T, msg_type: MsgType) -> Ciphertext
+	where
+		T: Identifiable + Serializable,
+	{
+		let sender = self.user_id;
+		let msg_id = pt.id();
+		let leaf = self.roster.idx(sender).unwrap();
+		let chain_tree = self.secrets.chain_tree_for_message_type(msg_type);
+		let (key, gen) = chain_tree.get_next(LeafIndex(leaf)).unwrap();
+		let material = hkdf::Hkdf::from_ikm(&key.0)
+			.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
+
+		// FIXME: introduce reuse guards
+
+		let enc_key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
+		let mac_key = hmac::Key::from(&material[aes_gcm::Key::SIZE..].try_into().unwrap());
+		let aes = aes_gcm::Aes::new_with_key(enc_key);
+		let ct = aes.encrypt(&pt.serialize());
+		let to_sign = Sha256::digest(
+			[
+				self.ctx().as_slice(),
+				sender.as_bytes(),
+				msg_id.as_bytes(),
+				&ct,
+			]
+			.concat(),
+		);
+		let sig = self.ssk.sign(&to_sign);
+		let to_mac = Sha256::digest([to_sign.as_slice(), sig.as_bytes()].concat());
+		let mac = hmac::digest(&mac_key, &to_mac);
+
+		Ciphertext {
+			msg_type,
+			msg_id,
+			sender,
+			guid: self.uid,
+			epoch: self.epoch,
+			gen,
+			payload: ct,
+			iv: aes.iv,
+			tag: mac,
+			sig,
+		}
+	}
+
+	fn decrypt<T>(&mut self, ct: Ciphertext) -> Result<T, Error>
+	where
+		T: Deserializable,
+	{
+		if let Some(sender) = self.roster.get(&ct.sender) {
+			let leaf = self.roster.idx(sender.id).or(Err(Error::UnknownSender))?;
+			let to_sign = Sha256::digest(
+				[
+					self.ctx().as_slice(),
+					sender.id.as_bytes(),
+					&ct.msg_id.0,
+					&ct.payload,
+				]
+				.concat(),
+			);
+
+			if !sender.kp.svk.verify(&to_sign, &ct.sig) {
+				return Err(Error::InvalidSignature);
+			}
+
+			// FIXME: introduce reuse guards
+
+			let chain_tree = self.secrets.chain_tree_for_message_type(ct.msg_type);
+			let key = chain_tree
+				.get(LeafIndex(leaf), ct.gen)
+				.or(Err(Error::FailedToDeriveChainTreeKey))?;
+			let material = hkdf::Hkdf::from_ikm(&key.0)
+				.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
+			let enc_key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
+			let mac_key = hmac::Key::from(&material[aes_gcm::Key::SIZE..].try_into().unwrap());
+			let to_mac = Sha256::digest([to_sign.as_slice(), ct.sig.as_bytes()].concat());
+
+			if !hmac::verify(&to_mac, &mac_key, &ct.tag) {
+				return Err(Error::InvalidMac);
+			}
+
+			let aes = aes_gcm::Aes::new_with_key_iv(enc_key, ct.iv);
+			let pt = aes.decrypt(&ct.payload).or(Err(Error::BadAesMaterial))?;
+			let message = T::deserialize(&pt).or(Err(Error::BadContentFormat))?;
+
+			Ok(message)
+		} else {
+			return Err(Error::UnknownSender);
+		}
 	}
 
 	// means: "This proposal is signed by *ME* from the *GROUP* that has *STATE*"
-	fn frame_proposal(&self, proposal: Proposal) -> FramedProposal {
+	fn frame_proposal(&mut self, proposal: Proposal) -> (FramedProposal, Ciphertext) {
 		let to_sign = Sha256::digest(
 			[
 				self.ctx().as_slice(),
@@ -196,10 +301,10 @@ impl Group {
 		let sig = self.ssk.sign(&to_sign);
 		let to_mac = Sha256::digest([to_sign.as_slice(), sig.as_bytes()].concat());
 		let mac_nonce = proposal::Nonce(rand::thread_rng().gen());
-		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce); // TODO: do I need to use a SecretsTree instead?
+		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce); // TODO: do I need to use a SecretsTree instead? - rather yes
 		let mac = hmac::digest(&mac_key, &to_mac);
 
-		FramedProposal::new(
+		let fc = FramedProposal::new(
 			self.uid,
 			self.epoch,
 			self.user_id,
@@ -207,7 +312,9 @@ impl Group {
 			sig,
 			mac,
 			mac_nonce,
-		)
+		);
+
+		(fc.clone(), self.encrypt(fc, MsgType::Propose))
 	}
 
 	/// verifies commit's guid, epoch & signature
@@ -300,6 +407,9 @@ impl Group {
 		(package, kp.sk)
 	}
 
+	// FramedCommit contains Cti; hence, the whole fc can be encrypted with the current hs chain
+	// should it be mac-ed with a dedicated hs chain available to the server to auth uploads? But why?
+	// recipients need to verify them anyway.
 	pub fn commit(
 		&mut self,
 		fps: &[FramedProposal],
@@ -402,7 +512,6 @@ impl Group {
 		Ok((framed_commit, ctds, welcomes))
 	}
 
-	// TODO: wrap { FramedCommit, Ctd }?
 	pub fn process(
 		&self,
 		fc: &FramedCommit,
@@ -509,17 +618,17 @@ impl Group {
 				self.conf_trans_hash,
 				conf_tag.clone(),
 				self.user_id,
+				joiner_secret.clone(),
 			);
 			let keys = invited
 				.iter()
 				.map(|m| m.kp.ek)
 				.collect::<Vec<ilum::PublicKey>>();
 
-			// FIXME: it's better to encrypt the whole welcome::Info object + joiner, but joiner only is ok for now as well
-			let encryption = hpkencrypt::encrypt(joiner_secret, &self.seed, &keys);
-			let to_sign = Sha256::digest([info.hash().as_slice(), &encryption.cti.hash()].concat());
+			let encryption = hpkencrypt::encrypt(&info.serialize(), &self.seed, &keys);
+			let to_sign = Sha256::digest(info.hash());
 			let sig = self.ssk.sign(&to_sign);
-			let cti = WlcmCti::new(info, encryption.cti, sig);
+			let cti = WlcmCti::new(encryption.cti, sig);
 			let ctds = invited
 				.iter()
 				.enumerate()
@@ -541,18 +650,30 @@ impl Group {
 		wi: &WlcmCti,
 		wd: &WlcmCtd,
 	) -> Result<Self, Error> {
-		let inviter = wi
-			.info
+		let info = welcome::Info::deserialize(
+			&hpkencrypt::decrypt(
+				&wi.cti.sym_ct,
+				&wi.cti.cti,
+				&wd.ctd,
+				seed,
+				&kp.ek,
+				&dk,
+				&wi.cti.iv,
+			)
+			.or(Err(Error::HpkeDecryptFailed))?,
+		)
+		.or(Err(Error::WrongWelcomeFormat))?;
+
+		let inviter = info
 			.roster
-			.get(&wi.info.inviter)
+			.get(&info.inviter)
 			.map_or(Err(Error::UnauthorizedInviter), |m| Ok(m))?;
 
 		if *id != wd.user_id {
 			return Err(Error::NotMyWelcome);
 		}
 
-		let invitee = wi
-			.info
+		let invitee = info
 			.roster
 			.get(id)
 			.map_or(Err(Error::InvitedButNotInRoster), |m| Ok(m))?;
@@ -561,52 +682,34 @@ impl Group {
 			return Err(Error::InitKeyMismatch);
 		}
 
-		let to_sign = Sha256::digest([wi.info.hash().as_slice(), &wi.cti.hash()].concat());
+		let to_sign = Sha256::digest(info.hash());
 
 		if !inviter.kp.svk.verify(&to_sign, &wi.sig) {
 			return Err(Error::InvalidWelcomeSignature);
 		}
 
-		if !wi.info.roster.verify_keys() {
+		if !info.roster.verify_keys() {
 			return Err(Error::ForgedRoster);
 		}
 
-		// let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
-		let ctx = Self::derive_ctx(
-			&wi.info.guid,
-			wi.info.epoch,
-			&wi.info.roster,
-			&wi.info.conf_trans_hash,
-		);
-		let joiner = JoinerSecret::try_from(
-			hpkencrypt::decrypt(
-				&wi.cti.sym_ct,
-				&wi.cti.cti,
-				&wd.ctd,
-				seed,
-				&invitee.kp.ek,
-				&dk,
-				&wi.cti.iv,
-			)
-			.or(Err(Error::HpkeDecryptFailed))?,
-		)
-		.or(Err(Error::WrongJoinerSecretSize))?;
-		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner);
+		let ctx = Self::derive_ctx(&info.guid, info.epoch, &info.roster, &info.conf_trans_hash);
+		let (secrets, conf_key) =
+			key_schedule::derive_epoch_secrets(ctx, &info.joiner, info.roster.len());
 
-		if !Self::verify_conf_tag(&conf_key, &wi.info.conf_trans_hash, &wi.info.conf_tag) {
+		if !Self::verify_conf_tag(&conf_key, &info.conf_trans_hash, &info.conf_tag) {
 			return Err(Error::InvalidConfTag);
 		}
 
 		let interim_trans_hash =
-			Self::interim_trans_hash(&wi.info.conf_trans_hash, wi.info.conf_tag.as_bytes());
+			Self::interim_trans_hash(&info.conf_trans_hash, info.conf_tag.as_bytes());
 
 		let group = Group {
-			uid: wi.info.guid,
-			epoch: wi.info.epoch,
+			uid: info.guid,
+			epoch: info.epoch,
 			seed: seed.clone(),
-			conf_trans_hash: wi.info.conf_trans_hash,
+			conf_trans_hash: info.conf_trans_hash,
 			interim_trans_hash,
-			roster: wi.info.roster.clone(),
+			roster: info.roster.clone(),
 			pending_updates: HashMap::new(),
 			pending_commits: HashMap::new(),
 			user_id: id.clone(),
@@ -624,7 +727,8 @@ impl Group {
 		commit_secret: &CommitSecret,
 	) -> (JoinerSecret, EpochSecrets, ConfirmationSecret) {
 		let joiner = key_schedule::derive_joiner(&prev_state.secrets.init, &commit_secret);
-		let (epoch_secrets, conf_key) = key_schedule::derive_epoch_secrets(self.ctx(), &joiner);
+		let (epoch_secrets, conf_key) =
+			key_schedule::derive_epoch_secrets(self.ctx(), &joiner, self.roster.len());
 
 		(joiner, epoch_secrets, conf_key)
 	}
@@ -840,8 +944,8 @@ impl Group {
 
 #[cfg(test)]
 mod tests {
-	use crate::{id::Id, key_package::KeyPackage, dilithium};
 	use super::{Group, Owner};
+	use crate::{dilithium, id::Id, key_package::KeyPackage};
 
 	#[test]
 	fn test_next() {
@@ -881,58 +985,120 @@ mod tests {
 		let bob_user_id = Id([34u8; 32]);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_user_skp = dilithium::KeyPair::generate();
-		let bob_user_kp = KeyPackage::new(&bob_user_ekp.pk, &bob_user_skp.public, &bob_user_skp.private);
-		let add_bob_prop = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		let bob_user_kp = KeyPackage::new(
+			&bob_user_ekp.pk,
+			&bob_user_skp.public,
+			&bob_user_skp.private,
+		);
+		let (add_bob_prop, _) = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
 		// alice invite using her initial group
 		let (fc, ctds, wlcms) = group.commit(&[add_bob_prop.clone()]).unwrap();
-		
+
 		// and get alice_group
-		let alice_group = group.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_bob_prop]).unwrap().unwrap();
+		let alice_group = group
+			.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_bob_prop])
+			.unwrap()
+			.unwrap();
 
 		// bob joins
-		let mut bob_group = Group::join(&bob_user_id, &bob_user_kp, &bob_user_ekp.sk, &bob_user_skp.private, &seed, &wlcms.clone().unwrap().0, wlcms.unwrap().1.get(0).unwrap()).unwrap();
+		let mut bob_group = Group::join(
+			&bob_user_id,
+			&bob_user_kp,
+			&bob_user_ekp.sk,
+			&bob_user_skp.private,
+			&seed,
+			&wlcms.clone().unwrap().0,
+			wlcms.unwrap().1.get(0).unwrap(),
+		)
+		.unwrap();
 
 		assert_eq!(alice_group.uid, bob_group.uid);
 		assert_eq!(alice_group.epoch, bob_group.epoch);
 		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
 		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
 		assert_eq!(alice_group.roster, bob_group.roster);
-		assert_eq!(alice_group.pending_commits.len(), bob_group.pending_commits.len());
-		assert_eq!(alice_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(
+			alice_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			alice_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
 		assert_eq!(alice_group.secrets, bob_group.secrets);
 
 		let charlie_user_id = Id([56u8; 32]);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_user_skp = dilithium::KeyPair::generate();
-		let charlie_user_kp = KeyPackage::new(&charlie_user_ekp.pk, &charlie_user_skp.public, &charlie_user_skp.private);
+		let charlie_user_kp = KeyPackage::new(
+			&charlie_user_ekp.pk,
+			&charlie_user_skp.public,
+			&charlie_user_skp.private,
+		);
 		// bob proposes to add charlie
-		let add_charlie_prop = bob_group.propose_add(charlie_user_id, charlie_user_kp.clone()).unwrap();
+		let (add_charlie_prop, _) = bob_group
+			.propose_add(charlie_user_id, charlie_user_kp.clone())
+			.unwrap();
 		// commits using his bob_group
 		let (fc, ctds, wlcms) = bob_group.commit(&[add_charlie_prop.clone()]).unwrap();
-		
+
 		// alices processes
-		let alice_group = alice_group.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_charlie_prop.clone()]).unwrap().unwrap();
+		let alice_group = alice_group
+			.process(
+				&fc,
+				&ctds.get(0).unwrap().1.unwrap(),
+				&[add_charlie_prop.clone()],
+			)
+			.unwrap()
+			.unwrap();
 		// bob processes
-		let bob_group = bob_group.process(&fc, &ctds.get(1).unwrap().1.unwrap(), &[add_charlie_prop]).unwrap().unwrap();
+		let bob_group = bob_group
+			.process(&fc, &ctds.get(1).unwrap().1.unwrap(), &[add_charlie_prop])
+			.unwrap()
+			.unwrap();
 		// charlie joins
-		let charlie_group = Group::join(&charlie_user_id, &charlie_user_kp, &charlie_user_ekp.sk, &charlie_user_skp.private, &seed, &wlcms.clone().unwrap().0, wlcms.unwrap().1.get(0).unwrap()).unwrap();
+		let charlie_group = Group::join(
+			&charlie_user_id,
+			&charlie_user_kp,
+			&charlie_user_ekp.sk,
+			&charlie_user_skp.private,
+			&seed,
+			&wlcms.clone().unwrap().0,
+			wlcms.unwrap().1.get(0).unwrap(),
+		)
+		.unwrap();
 
 		assert_eq!(alice_group.uid, bob_group.uid);
 		assert_eq!(alice_group.epoch, bob_group.epoch);
 		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
 		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
 		assert_eq!(alice_group.roster, bob_group.roster);
-		assert_eq!(alice_group.pending_commits.len(), bob_group.pending_commits.len());
-		assert_eq!(alice_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(
+			alice_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			alice_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
 		assert_eq!(alice_group.secrets, bob_group.secrets);
 
 		assert_eq!(charlie_group.uid, bob_group.uid);
 		assert_eq!(charlie_group.epoch, bob_group.epoch);
 		assert_eq!(charlie_group.conf_trans_hash, bob_group.conf_trans_hash);
-		assert_eq!(charlie_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(
+			charlie_group.interim_trans_hash,
+			bob_group.interim_trans_hash
+		);
 		assert_eq!(charlie_group.roster, bob_group.roster);
-		assert_eq!(charlie_group.pending_commits.len(), bob_group.pending_commits.len());
-		assert_eq!(charlie_group.pending_updates.len(), bob_group.pending_updates.len());
+		assert_eq!(
+			charlie_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			charlie_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
 		assert_eq!(charlie_group.secrets, bob_group.secrets);
 	}
 

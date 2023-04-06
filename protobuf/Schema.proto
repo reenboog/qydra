@@ -1,0 +1,71 @@
+// FIXME: move me to a dependency instead
+syntax = "proto2";
+
+package main;
+
+message KeyPackage {
+	required bytes ek = 1;
+	required bytes svk = 2;
+	required bytes signature = 3;
+}
+
+message Member {
+	required bytes id = 1;
+	required KeyPackage kp = 2;
+}
+
+message Roster {
+	repeated Member members = 1;
+}
+
+message GroupInfo {
+	required bytes guid = 1;
+	required uint64 epoch = 2;
+	required Roster roster = 3;
+	required bytes conf_trans_hash = 4;
+	required bytes conf_tag = 5;
+	required bytes inviter = 6;
+	required bytes joiner = 7;
+}
+
+message Prop {
+	message Remove {
+		required bytes id = 1;
+	}
+
+	message Update {
+		required KeyPackage kp = 1;
+	}
+
+	message Add {
+		required bytes id = 1;
+		required KeyPackage kp = 2;
+	}
+
+	oneof variant {
+		// option (validate.required) = true;
+
+		Remove remove = 1;
+		Update update = 2;
+		Add add = 3;
+	}
+}
+
+message FramedProposal {
+	required bytes guid = 1;
+	required uint64 epoch = 2;
+	required bytes sender = 3;
+	required Prop prop = 4;
+	required bytes sig = 5;
+	required bytes mac = 6;
+	required bytes nonce = 7;
+}
+
+// pub struct Commit {
+// 	// committer new key package
+// 	pub kp: KeyPackage,
+// 	// key-independent, compound (multi-layered) encapsulation
+// 	pub cti: hpkencrypt::CmpdCti,
+// 	// proposal ids; order is important, so should be pre-sorted/validated
+// 	pub prop_ids: Vec<Id>,
+// }

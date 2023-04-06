@@ -1,6 +1,8 @@
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::chain_tree::ChainTree;
+use crate::ciphertext::MsgType;
 use crate::hash;
 use crate::hkdf;
 
@@ -13,21 +15,35 @@ pub type CommitSecret = [u8; hash::SIZE]; // sent to existing users; later appli
 
 // these should be persisted per epoch
 pub type InitSecret = [u8; hash::SIZE];
-pub type AppSecret = [u8; hash::SIZE];
 pub type MacSecret = [u8; hash::SIZE];
-// TODO: introduce ResumptinSecret for session reinitialization?
+// TODO: introduce ResumptionSecret for session reinitialization?
+
+const MAX_KEYS_TO_SKIP: u32 = 1000;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct EpochSecrets {
 	pub init: InitSecret,
-	pub app: AppSecret,
-	pub mac: MacSecret,
+	pub mac: MacSecret, // TODO: get rid of me
+
+	pub hs: ChainTree,
+	pub app: ChainTree,
+}
+
+impl EpochSecrets {
+	pub fn chain_tree_for_message_type(&mut self, msg_type: MsgType) -> &mut ChainTree {
+		match msg_type {
+			MsgType::Propose => &mut self.hs,
+			MsgType::Commit => &mut self.hs,
+			MsgType::App => &mut self.app,
+		}
+	}
 }
 
 // TODO: introduce a type for tcx?
 pub fn derive_epoch_secrets(
 	ctx: hash::Hash,
 	joiner_secret: &JoinerSecret,
+	group_size: u32,
 ) -> (EpochSecrets, ConfirmationSecret) {
 	// TODO: introduce psk into the scheme?
 	let digest = Sha256::digest([ctx.as_slice(), joiner_secret].concat());
@@ -37,8 +53,17 @@ pub fn derive_epoch_secrets(
 	let app = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"app_secret");
 	let mac = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"mac_secret");
 	let conf = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"conf_secret");
+	let hs = hkdf::Hkdf::from_ikm(&digest).expand::<{ hash::SIZE }>(b"hs_secret");
 
-	(EpochSecrets { init, app, mac }, conf)
+	(
+		EpochSecrets {
+			init,
+			mac,
+			app: ChainTree::try_new(group_size, app, MAX_KEYS_TO_SKIP).unwrap(),
+			hs: ChainTree::try_new(group_size, hs, MAX_KEYS_TO_SKIP).unwrap(),
+		},
+		conf,
+	)
 }
 
 pub fn derive_joiner(init_secret: &InitSecret, commit_secret: &CommitSecret) -> JoinerSecret {

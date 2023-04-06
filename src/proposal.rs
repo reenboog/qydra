@@ -2,11 +2,11 @@ use crate::{
 	dilithium::Signature,
 	hash::{Hash, Hashable},
 	hmac::Digest,
-	id::Id,
+	id::{Id, Identifiable},
 	key_package::KeyPackage,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Proposal {
 	Remove { id: Id },
 	Update { kp: KeyPackage },
@@ -60,18 +60,24 @@ impl Hashable for Proposal {
 	}
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Nonce(pub [u8; 4]);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
+// almost the whole structure can be encrypted with the current hs chain
+// non encrypted FC should be stored alongside with its encrypted counterpart in order to call `commit`
+// otherwise, its corresponding chain_tree entry will be consumed immediately when encrypting and decrypting my
+// own proposal wouldn't be possible (unless a copy of my hs encryption chain is employed)
 pub struct FramedProposal {
 	pub guid: Hash,
 	pub epoch: u64,
 	pub sender: Id,
 	pub prop: Proposal,
-	pub sig: Signature, // signed with ssk (not updated upon rekey currently)
-	pub mac: Digest,
-	pub nonce: Nonce, // mixed with the mac_key to prevent key reuse
+	// FIXME: should I use ECC inside instead, so that PQ would be applied to the outer layer while
+	// ECC will be used in the internal layer for efficiency?
+	pub sig: Signature, // signed with ssk (not updated upon rekey currently); do I need this as well? I could verify the encrypted content instead
+	pub mac: Digest,    // do I need this? I'll be encrypting this prop anyway
+	pub nonce: Nonce, // mixed with the mac_key to prevent key reuse; but should it be mac-ed with a hs chain actually?
 }
 
 // a validated by a group proposal
@@ -101,8 +107,10 @@ impl FramedProposal {
 			nonce,
 		}
 	}
+}
 
-	pub fn id(&self) -> Id {
+impl Identifiable for FramedProposal {
+	fn id(&self) -> Id {
 		use sha2::{Digest, Sha256};
 
 		Id(Sha256::digest(

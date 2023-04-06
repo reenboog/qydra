@@ -3,7 +3,7 @@ use crate::{
 	group::Group,
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt,
-	id::Id,
+	id::{Id, Identifiable},
 	key_package::KeyPackage,
 };
 use sha2::{Digest, Sha256};
@@ -51,7 +51,10 @@ pub struct FramedCommit {
 	pub epoch: u64,
 	pub sender: Id,
 	pub commit: Commit,
-	pub sig: Signature,
+	// FIXME: should I use ECC inside instead, so that PQ would be applied to the outer layer while
+	// ECC will be used in the internal layer for efficiency?
+	pub sig: Signature, // do I need this? I could verify the encrypted content instead
+	// TODO: how about mac?
 	pub conf_tag: hmac::Digest,
 }
 
@@ -73,8 +76,10 @@ impl FramedCommit {
 			conf_tag,
 		}
 	}
+}
 
-	pub fn id(&self) -> Id {
+impl Identifiable for FramedCommit {
+	fn id(&self) -> Id {
 		Id(Sha256::digest(
 			[
 				self.guid.as_slice(),
