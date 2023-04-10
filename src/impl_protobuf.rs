@@ -30,6 +30,7 @@ pub enum Error {
 	WrongIvSize,
 	BadCtiFormat,
 	BadCommitFormat,
+	BadFramedCommitFormat,
 }
 
 // KeyPackage
@@ -402,9 +403,37 @@ impl Deserializable for commit::Commit {
 }
 
 // FramedCommit
+impl From<&commit::FramedCommit> for FramedCommit {
+	fn from(val: &commit::FramedCommit) -> Self {
+		Self {
+			guid: val.guid.to_vec(),
+			epoch: val.epoch,
+			sender: val.sender.as_bytes().to_vec(),
+			commit: (&val.commit).into(),
+			sig: val.sig.as_bytes().to_vec(),
+			conf_tag: val.conf_tag.as_bytes().to_vec(),
+		}
+	}
+}
+
 impl Serializable for commit::FramedCommit {
 	fn serialize(&self) -> Vec<u8> {
-		todo!()
+		FramedCommit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<FramedCommit> for commit::FramedCommit {
+	type Error = Error;
+
+	fn try_from(val: FramedCommit) -> Result<Self, Self::Error> {
+		Ok(Self::new(
+			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			val.epoch,
+			id::Id(val.sender.try_into().or(Err(Error::WrongIdSize))?),
+			val.commit.try_into().or(Err(Error::BadCommitFormat))?,
+			dilithium::Signature::new(val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?),
+			val.conf_tag.try_into().or(Err(Error::WrongMacSize))?,
+		))
 	}
 }
 
@@ -415,7 +444,7 @@ impl Deserializable for commit::FramedCommit {
 	where
 		Self: Sized,
 	{
-		todo!()
+		Self::try_from(FramedCommit::decode(buf).or(Err(Error::BadFramedCommitFormat))?)
 	}
 }
 
@@ -587,5 +616,30 @@ mod tests {
 		let deserialized = commit::Commit::deserialize(&serialized);
 
 		assert_eq!(Ok(commit), deserialized);
+	}
+
+	#[test]
+	fn test_framed_commit() {
+		let kp = key_package::KeyPackage {
+			ek: [56u8; 768],
+			svk: dilithium::PublicKey::new([78u8; 2592]),
+			signature: dilithium::Signature::new([90u8; 4595]),
+		};
+		let cti = hpkencrypt::CmpdCti::new(
+			[123u8; 704],
+			aes_gcm::Iv([45u8; 12]),
+			vec![1, 2, 3, 4, 5, 6, 7],
+		);
+		let commit = commit::Commit {
+			kp,
+			cti,
+			prop_ids: vec![id::Id([12u8; 32]), id::Id([34u8; 32])],
+		};
+
+		let fc = commit::FramedCommit::new([88u8; 32], 42, id::Id([33u8; 32]), commit, dilithium::Signature::new([77u8; 4595]), hmac::Digest([22u8; 32]));
+		let serialized = fc.serialize();
+		let deserialized = commit::FramedCommit::deserialize(&serialized);
+
+		assert_eq!(Ok(fc), deserialized);
 	}
 }

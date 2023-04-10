@@ -46,6 +46,7 @@ impl Hashable for Commit {
 }
 
 // I already have types for Cti & Ctd, but sym enc is now required (Cti)
+#[derive(Debug, PartialEq)]
 pub struct FramedCommit {
 	pub guid: Hash,
 	pub epoch: u64,
