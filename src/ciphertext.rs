@@ -1,22 +1,27 @@
 use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id};
 
-#[derive(Clone, Copy)]
-pub enum MsgType {
-	Propose,
-	Commit,
-	App,
+#[derive(Debug, PartialEq)]
+pub enum Error {
+	UnknownContentType,
 }
 
-// TODO: add padding
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ContentType {
+	App,
+	Propose,
+	Commit,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Ciphertext {
-	pub msg_type: MsgType,
-	pub msg_id: Id,
-	pub sender: Id,
+	pub content_type: ContentType,
+	pub content_id: Id,
+	pub payload: Vec<u8>,
 	pub guid: Hash,
 	pub epoch: u64,
 	pub gen: u32,
-	pub payload: Vec<u8>,
+	pub sender: Id,
 	pub iv: aes_gcm::Iv,
-	pub tag: hmac::Digest,
 	pub sig: dilithium::Signature,
+	pub mac: hmac::Digest,
 }

@@ -2,7 +2,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::chain_tree::ChainTree;
-use crate::ciphertext::MsgType;
+use crate::ciphertext::ContentType;
 use crate::hash;
 use crate::hkdf;
 
@@ -30,11 +30,11 @@ pub struct EpochSecrets {
 }
 
 impl EpochSecrets {
-	pub fn chain_tree_for_message_type(&mut self, msg_type: MsgType) -> &mut ChainTree {
+	pub fn chain_tree_for_message_type(&mut self, msg_type: ContentType) -> &mut ChainTree {
 		match msg_type {
-			MsgType::Propose => &mut self.hs,
-			MsgType::Commit => &mut self.hs,
-			MsgType::App => &mut self.app,
+			ContentType::Propose => &mut self.hs,
+			ContentType::Commit => &mut self.hs,
+			ContentType::App => &mut self.app,
 		}
 	}
 }

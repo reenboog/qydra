@@ -1,7 +1,7 @@
 include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
 use crate::{
-	aes_gcm, commit, dilithium, hpkencrypt, id, key_package, member, proposal, roster,
+	aes_gcm, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, proposal, roster,
 	serializable::{Deserializable, Serializable},
 	welcome,
 };
@@ -31,6 +31,8 @@ pub enum Error {
 	BadCtiFormat,
 	BadCommitFormat,
 	BadFramedCommitFormat,
+	UnknownContentType,
+	BadCiphertextFormat,
 }
 
 // KeyPackage
@@ -448,12 +450,108 @@ impl Deserializable for commit::FramedCommit {
 	}
 }
 
-//--------
+impl From<&ciphertext::ContentType> for ContentType {
+	fn from(val: &ciphertext::ContentType) -> Self {
+		use ciphertext::ContentType as Cct;
+		use ContentType as Pct;
+
+		match val {
+			Cct::App => Pct::App,
+			Cct::Propose => Pct::Propsl,
+			Cct::Commit => Pct::Commt,
+		}
+	}
+}
+
+impl From<ContentType> for ciphertext::ContentType {
+	fn from(val: ContentType) -> Self {
+		use ciphertext::ContentType as Cct;
+		use ContentType as Pct;
+
+		match val {
+			Pct::App => Cct::App,
+			Pct::Propsl => Cct::Propose,
+			Pct::Commt => Cct::Commit,
+		}
+	}
+}
+
+impl TryFrom<i32> for ContentType {
+	type Error = Error;
+
+	fn try_from(val: i32) -> Result<Self, Self::Error> {
+		match val {
+			1 => Ok(Self::App),
+			2 => Ok(Self::Propsl),
+			3 => Ok(Self::Commt),
+			_ => Err(Error::UnknownContentType),
+		}
+	}
+}
+
+// Ciphertext
+impl From<&ciphertext::Ciphertext> for Ciphertext {
+	fn from(val: &ciphertext::Ciphertext) -> Self {
+		Self {
+			content_type: ContentType::from(&val.content_type).into(),
+			content_id: val.content_id.as_bytes().to_vec(),
+			payload: val.payload.clone(),
+			guid: val.guid.to_vec(),
+			epoch: val.epoch,
+			gen: val.gen,
+			sender: val.sender.as_bytes().to_vec(),
+			iv: val.iv.as_bytes().to_vec(),
+			sig: val.sig.as_bytes().to_vec(),
+			mac: val.mac.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for ciphertext::Ciphertext {
+	fn serialize(&self) -> Vec<u8> {
+		Ciphertext::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
+	type Error = Error;
+
+	fn try_from(val: Ciphertext) -> Result<Self, Self::Error> {
+		Ok(Self {
+			content_type: ciphertext::ContentType::from(
+				ContentType::try_from(val.content_type).or(Err(Error::UnknownContentType))?,
+			),
+			content_id: id::Id(val.content_id.try_into().or(Err(Error::WrongIdSize))?),
+			payload: val.payload,
+			guid: val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			epoch: val.epoch,
+			gen: val.gen,
+			sender: id::Id(val.sender.try_into().or(Err(Error::WrongIdSize))?),
+			iv: aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
+			sig: dilithium::Signature::new(
+				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
+			),
+			mac: val.mac.try_into().or(Err(Error::WrongMacSize))?,
+		})
+	}
+}
+
+impl Deserializable for ciphertext::Ciphertext {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Ciphertext::decode(buf).or(Err(Error::BadCiphertextFormat))?)
+	}
+}
 
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, commit, dilithium, hmac, hpkencrypt, id, key_package, member, proposal, roster,
+		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
+		proposal, roster,
 		serializable::{Deserializable, Serializable},
 	};
 
@@ -636,10 +734,37 @@ mod tests {
 			prop_ids: vec![id::Id([12u8; 32]), id::Id([34u8; 32])],
 		};
 
-		let fc = commit::FramedCommit::new([88u8; 32], 42, id::Id([33u8; 32]), commit, dilithium::Signature::new([77u8; 4595]), hmac::Digest([22u8; 32]));
+		let fc = commit::FramedCommit::new(
+			[88u8; 32],
+			42,
+			id::Id([33u8; 32]),
+			commit,
+			dilithium::Signature::new([77u8; 4595]),
+			hmac::Digest([22u8; 32]),
+		);
 		let serialized = fc.serialize();
 		let deserialized = commit::FramedCommit::deserialize(&serialized);
 
 		assert_eq!(Ok(fc), deserialized);
+	}
+
+	#[test]
+	fn test_ciphertext() {
+		let ct = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: [34u8; 32],
+			epoch: 77,
+			gen: 1984,
+			sender: id::Id([56u8; 32]),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+		};
+		let serialized = ct.serialize();
+		let deserialized = ciphertext::Ciphertext::deserialize(&serialized);
+
+		assert_eq!(Ok(ct), deserialized);
 	}
 }

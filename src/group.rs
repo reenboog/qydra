@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ilum::*;
 use rand::Rng;
 
-use crate::ciphertext::{Ciphertext, MsgType};
+use crate::ciphertext::{Ciphertext, ContentType};
 use crate::commit::{Commit, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
@@ -196,7 +196,7 @@ impl Group {
 		(fp, ct)
 	}
 
-	fn encrypt<T>(&mut self, pt: T, msg_type: MsgType) -> Ciphertext
+	fn encrypt<T>(&mut self, pt: T, msg_type: ContentType) -> Ciphertext
 	where
 		T: Identifiable + Serializable,
 	{
@@ -228,15 +228,15 @@ impl Group {
 		let mac = hmac::digest(&mac_key, &to_mac);
 
 		Ciphertext {
-			msg_type,
-			msg_id,
+			content_type: msg_type,
+			content_id: msg_id,
 			sender,
 			guid: self.uid,
 			epoch: self.epoch,
 			gen,
 			payload: ct,
 			iv: aes.iv,
-			tag: mac,
+			mac,
 			sig,
 		}
 	}
@@ -251,7 +251,7 @@ impl Group {
 				[
 					self.ctx().as_slice(),
 					sender.id.as_bytes(),
-					&ct.msg_id.0,
+					&ct.content_id.0,
 					&ct.payload,
 				]
 				.concat(),
@@ -263,7 +263,7 @@ impl Group {
 
 			// FIXME: introduce reuse guards
 
-			let chain_tree = self.secrets.chain_tree_for_message_type(ct.msg_type);
+			let chain_tree = self.secrets.chain_tree_for_message_type(ct.content_type);
 			let key = chain_tree
 				.get(LeafIndex(leaf), ct.gen)
 				.or(Err(Error::FailedToDeriveChainTreeKey))?;
@@ -273,7 +273,7 @@ impl Group {
 			let mac_key = hmac::Key::from(&material[aes_gcm::Key::SIZE..].try_into().unwrap());
 			let to_mac = Sha256::digest([to_sign.as_slice(), ct.sig.as_bytes()].concat());
 
-			if !hmac::verify(&to_mac, &mac_key, &ct.tag) {
+			if !hmac::verify(&to_mac, &mac_key, &ct.mac) {
 				return Err(Error::InvalidMac);
 			}
 
@@ -314,7 +314,7 @@ impl Group {
 			mac_nonce,
 		);
 
-		(fp.clone(), self.encrypt(fp, MsgType::Propose))
+		(fp.clone(), self.encrypt(fp, ContentType::Propose))
 	}
 
 	/// verifies commit's guid, epoch & signature
