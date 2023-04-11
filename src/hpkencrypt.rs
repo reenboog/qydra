@@ -47,6 +47,15 @@ fn aes_expand_key(seed: &[u8]) -> aes_gcm::Key {
 	aes_gcm::Key(aes_key)
 }
 
+fn aes_expand_key_iv(seed: &[u8]) -> aes_gcm::Aes {
+	let material =
+		hkdf::Hkdf::from_ikm(seed).expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
+	let key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
+	let iv = aes_gcm::Iv(material[aes_gcm::Key::SIZE..].try_into().unwrap());
+
+	aes_gcm::Aes::new_with_key_iv(key, iv)
+}
+
 // TODO: should expect a mixed PK type, eg CmpdPublicKey or something
 pub fn encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> Encryption {
 	let encapsulated = ilum::enc(seed, keys);
@@ -84,12 +93,7 @@ pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncryption {
 	let ctds = keys
 		.iter()
 		.map(|key| {
-			let ss = x448::dh_exchange(&eph_kp.private, key);
-			let material = hkdf::Hkdf::from_ikm(ss.as_bytes())
-				.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
-			let key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
-			let iv = aes_gcm::Iv(material[aes_gcm::Key::SIZE..].try_into().unwrap());
-			let outer_aes = aes_gcm::Aes::new_with_key_iv(key, iv);
+			let outer_aes = aes_expand_key_iv(x448::dh_exchange(&eph_kp.private, key).as_bytes());
 
 			outer_aes.encrypt(&inner_aes.as_bytes())
 		})
@@ -108,12 +112,7 @@ pub fn ecc_decrypt(
 	sk: &x448::PrivateKey,
 	eph_key: &x448::PublicKey,
 ) -> Result<Vec<u8>, Error> {
-	let ss = x448::dh_exchange(sk, eph_key);
-	let material = hkdf::Hkdf::from_ikm(ss.as_bytes())
-		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
-	let key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
-	let iv = aes_gcm::Iv(material[aes_gcm::Key::SIZE..].try_into().unwrap());
-	let outer_aes = aes_gcm::Aes::new_with_key_iv(key, iv);
+	let outer_aes = aes_expand_key_iv(x448::dh_exchange(sk, eph_key).as_bytes());
 	let inner_aes_bytes = outer_aes.decrypt(&ctd).or(Err(Error::BadAesMaterial))?;
 	let inner_aes =
 		aes_gcm::Aes::try_from(inner_aes_bytes.as_ref()).or(Err(Error::BadAesFormat))?;
@@ -269,7 +268,15 @@ mod tests {
 		);
 
 		kps.iter().enumerate().for_each(|(idx, kp)| {
-			assert_eq!(Ok(pt.to_vec()), ecc_decrypt(&encrypted.ct, &encrypted.ctds[idx], &kp.private, &encrypted.eph_key));
+			assert_eq!(
+				Ok(pt.to_vec()),
+				ecc_decrypt(
+					&encrypted.ct,
+					&encrypted.ctds[idx],
+					&kp.private,
+					&encrypted.eph_key
+				)
+			);
 		});
 	}
 }
