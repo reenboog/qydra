@@ -11,6 +11,10 @@ author = "Alex Gievsky"
 ilum = { git = "https://github.com/reenboog/ilum", version = "0.1.0" }
 pqcrypto-dilithium = { version = "0.4.6" }
 pqcrypto-traits = { version = "0.3.4"}
+# 448 ec
+x448 = { version = "0.6" }
+# TODO: move to our own bitbucket repo?
+ed448-rust = { git = "https://github.com/reenboog/ed448-rust", branch = "master" }
 
 # randomness
 rand = { version = "0.8.5" }

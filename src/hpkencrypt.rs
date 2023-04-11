@@ -1,14 +1,11 @@
-use crate::{
-	aes_gcm::{self, Aes},
-	hash::Hashable,
-	hkdf,
-};
+use crate::{aes_gcm, hash::Hashable, hkdf, x448};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
 	KeyPairMismatch,
 	BadAesMaterial,
+	BadAesFormat,
 }
 
 pub struct Encryption {
@@ -25,7 +22,7 @@ pub struct CmpdCti {
 	// key-independent encapsulation
 	pub cti: ilum::Cti,
 	// aes iv
-	pub iv: aes_gcm::Iv,
+	pub iv: aes_gcm::Iv, // TODO: remove
 	// aes ciphertext
 	pub sym_ct: Vec<u8>,
 }
@@ -54,13 +51,74 @@ fn aes_expand_key(seed: &[u8]) -> aes_gcm::Key {
 pub fn encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> Encryption {
 	let encapsulated = ilum::enc(seed, keys);
 	let aes_key = aes_expand_key(&encapsulated.ss);
-	let aes = Aes::new_with_key(aes_key);
+	let aes = aes_gcm::Aes::new_with_key(aes_key);
 	let ct = aes.encrypt(pt);
+	// eph = ecc_gen()
+	// hpkencrypt(eph + aes_key1)
+	// aes_key = ct + ecc_enc(ecc_key, eph, recipient_key)
+	// hpkencrypt(eph)
 
 	Encryption {
 		cti: CmpdCti::new(encapsulated.cti, aes.iv, ct),
 		ctds: encapsulated.ctds,
 	}
+}
+
+type EccCtd = Vec<u8>;
+
+pub struct EccEncryption {
+	pub eph_key: x448::PublicKey,
+	pub ct: Vec<u8>,
+	pub ctds: Vec<EccCtd>,
+}
+
+pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncryption {
+	// TODO: consider rayon for parallel dh operations
+
+	// generate a random aes key/iv pair
+	let inner_aes = aes_gcm::Aes::new();
+	// encrypt pt with the generated aes
+	let ct = inner_aes.encrypt(pt);
+	let eph_kp = x448::KeyPair::generate();
+	// encrypt the used aes to each specified public key
+	let ctds = keys
+		.iter()
+		.map(|key| {
+			let ss = x448::dh_exchange(&eph_kp.private, key);
+			let material = hkdf::Hkdf::from_ikm(ss.as_bytes())
+				.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
+			let key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
+			let iv = aes_gcm::Iv(material[aes_gcm::Key::SIZE..].try_into().unwrap());
+			let outer_aes = aes_gcm::Aes::new_with_key_iv(key, iv);
+
+			outer_aes.encrypt(&inner_aes.as_bytes())
+		})
+		.collect::<Vec<EccCtd>>();
+
+	EccEncryption {
+		eph_key: eph_kp.public,
+		ct,
+		ctds,
+	}
+}
+
+pub fn ecc_decrypt(
+	ct: &[u8],
+	ctd: &[u8],
+	sk: &x448::PrivateKey,
+	eph_key: &x448::PublicKey,
+) -> Result<Vec<u8>, Error> {
+	let ss = x448::dh_exchange(sk, eph_key);
+	let material = hkdf::Hkdf::from_ikm(ss.as_bytes())
+		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
+	let key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
+	let iv = aes_gcm::Iv(material[aes_gcm::Key::SIZE..].try_into().unwrap());
+	let outer_aes = aes_gcm::Aes::new_with_key_iv(key, iv);
+	let inner_aes_bytes = outer_aes.decrypt(&ctd).or(Err(Error::BadAesMaterial))?;
+	let inner_aes =
+		aes_gcm::Aes::try_from(inner_aes_bytes.as_ref()).or(Err(Error::BadAesFormat))?;
+
+	inner_aes.decrypt(ct).or(Err(Error::BadAesMaterial))
 }
 
 pub fn decrypt(
@@ -75,16 +133,15 @@ pub fn decrypt(
 	let ss = ilum::dec(cti, ctd, seed, pk, sk).ok_or(Error::KeyPairMismatch)?;
 	let aes_key = aes_expand_key(&ss);
 
-	Aes::new_with_key_iv(aes_key, iv.clone())
+	aes_gcm::Aes::new_with_key_iv(aes_key, iv.clone())
 		.decrypt(ct)
 		.or(Err(Error::BadAesMaterial))
 }
 
 #[cfg(test)]
 mod tests {
-	use crate::aes_gcm::Iv;
-
-	use super::{decrypt, encrypt, Error};
+	use super::{decrypt, ecc_decrypt, ecc_encrypt, encrypt, Error};
+	use crate::aes_gcm;
 
 	#[test]
 	fn test_encrypt_to_no_keys() {
@@ -188,10 +245,31 @@ mod tests {
 				&seed,
 				&kp.pk,
 				&kp.sk,
-				&Iv::generate(),
+				&aes_gcm::Iv::generate(),
 			);
 
 			assert_eq!(r, Err(Error::BadAesMaterial));
+		});
+	}
+
+	#[test]
+	fn test_ecc_encrypt_decrypt() {
+		use crate::x448;
+
+		let kps = (0..10)
+			.map(|_| x448::KeyPair::generate())
+			.collect::<Vec<x448::KeyPair>>();
+		let pt = b"hey there";
+
+		let encrypted = ecc_encrypt(
+			pt,
+			&kps.iter()
+				.map(|kp| kp.public.clone())
+				.collect::<Vec<x448::PublicKey>>(),
+		);
+
+		kps.iter().enumerate().for_each(|(idx, kp)| {
+			assert_eq!(Ok(pt.to_vec()), ecc_decrypt(&encrypted.ct, &encrypted.ctds[idx], &kp.private, &encrypted.eph_key));
 		});
 	}
 }

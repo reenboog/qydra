@@ -196,14 +196,14 @@ impl Group {
 		(fp, ct)
 	}
 
-	fn encrypt<T>(&mut self, pt: T, msg_type: ContentType) -> Ciphertext
+	fn encrypt<T>(&mut self, pt: &T, content_type: ContentType) -> Ciphertext
 	where
 		T: Identifiable + Serializable,
 	{
 		let sender = self.user_id;
 		let msg_id = pt.id();
 		let leaf = self.roster.idx(sender).unwrap();
-		let chain_tree = self.secrets.chain_tree_for_message_type(msg_type);
+		let chain_tree = self.secrets.chain_tree_for_message_type(content_type);
 		let (key, gen) = chain_tree.get_next(LeafIndex(leaf)).unwrap();
 		let material = hkdf::Hkdf::from_ikm(&key.0)
 			.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
@@ -228,7 +228,7 @@ impl Group {
 		let mac = hmac::digest(&mac_key, &to_mac);
 
 		Ciphertext {
-			content_type: msg_type,
+			content_type,
 			content_id: msg_id,
 			sender,
 			guid: self.uid,
@@ -314,7 +314,7 @@ impl Group {
 			mac_nonce,
 		);
 
-		(fp.clone(), self.encrypt(fp, ContentType::Propose))
+		(fp.clone(), self.encrypt(&fp, ContentType::Propose))
 	}
 
 	/// verifies commit's guid, epoch & signature
@@ -509,6 +509,8 @@ impl Group {
 			},
 		);
 
+		let ct = self.encrypt(&framed_commit, ContentType::Commit);
+
 		// TODO: encrypt fc and return alongside with framed_commit
 		Ok((framed_commit, ctds, welcomes))
 	}
@@ -626,6 +628,7 @@ impl Group {
 				.map(|m| m.kp.ek)
 				.collect::<Vec<ilum::PublicKey>>();
 
+			// multilayering could be nice to have here
 			let encryption = hpkencrypt::encrypt(&info.serialize(), &self.seed, &keys);
 			let to_sign = Sha256::digest(info.hash());
 			let sig = self.ssk.sign(&to_sign);

@@ -39,23 +39,13 @@ impl NonceSequence for Iv {
 	}
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Tag(pub [u8; Self::SIZE]);
-
-impl Tag {
-	pub const SIZE: usize = 16;
-
-	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
-		&self.0
-	}
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Error {
 	WrongKeyMaterial,
+	WrongKeyIvSize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Aes {
 	pub key: Key,
 	pub iv: Iv,
@@ -96,6 +86,31 @@ impl Aes {
 			.or(Err(Error::WrongKeyMaterial))?;
 
 		Ok(r.to_vec())
+	}
+
+	pub fn as_bytes(&self) -> [u8; Key::SIZE + Iv::SIZE] {
+		[
+			self.key.as_bytes().as_slice(),
+			self.iv.as_bytes().as_slice(),
+		]
+		.concat()
+		.try_into()
+		.unwrap()
+	}
+}
+
+impl TryFrom<&[u8]> for Aes {
+	type Error = Error;
+
+	fn try_from(val: &[u8]) -> Result<Self, Self::Error> {
+		if val.len() != Key::SIZE + Iv::SIZE {
+			Err(Error::WrongKeyIvSize)
+		} else {
+			Ok(Self::new_with_key_iv(
+				Key(val[..Key::SIZE].try_into().unwrap()),
+				Iv(val[Key::SIZE..].try_into().unwrap()),
+			))
+		}
 	}
 }
 
@@ -155,5 +170,17 @@ mod tests {
 		let pt = aes.decrypt(&ct).unwrap();
 
 		assert_eq!(pt, ref_pt.to_vec());
+	}
+
+	#[test]
+	fn test_try_from() {
+		let aes = Aes::new();
+		let as_bytes = aes.as_bytes();
+
+		assert_eq!(Ok(aes), Aes::try_from(as_bytes.as_slice()));
+		assert_eq!(
+			Err(Error::WrongKeyIvSize),
+			Aes::try_from(vec![1, 2, 3].as_slice())
+		);
 	}
 }
