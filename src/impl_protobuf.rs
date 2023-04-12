@@ -317,23 +317,23 @@ impl Deserializable for proposal::FramedProposal {
 }
 
 // CmpdCti
-impl From<&hpkencrypt::CmpdCti> for CmpdCti {
-	fn from(val: &hpkencrypt::CmpdCti) -> Self {
+impl From<&hpkencrypt::IlumCti> for CmpdCti {
+	fn from(val: &hpkencrypt::IlumCti) -> Self {
 		Self {
 			cti: val.cti.to_vec(),
 			iv: val.iv.as_bytes().to_vec(),
-			sym_ct: val.sym_ct.to_vec(),
+			sym_ct: val.ct.to_vec(),
 		}
 	}
 }
 
-impl Serializable for hpkencrypt::CmpdCti {
+impl Serializable for hpkencrypt::IlumCti {
 	fn serialize(&self) -> Vec<u8> {
 		CmpdCti::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<CmpdCti> for hpkencrypt::CmpdCti {
+impl TryFrom<CmpdCti> for hpkencrypt::IlumCti {
 	type Error = Error;
 
 	fn try_from(val: CmpdCti) -> Result<Self, Self::Error> {
@@ -345,7 +345,7 @@ impl TryFrom<CmpdCti> for hpkencrypt::CmpdCti {
 	}
 }
 
-impl Deserializable for hpkencrypt::CmpdCti {
+impl Deserializable for hpkencrypt::IlumCti {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -682,13 +682,13 @@ mod tests {
 
 	#[test]
 	fn test_cmpd_cti() {
-		let cti = hpkencrypt::CmpdCti::new(
+		let cti = hpkencrypt::IlumCti::new(
 			[123u8; 704],
 			aes_gcm::Iv([45u8; 12]),
 			vec![1, 2, 3, 4, 5, 6, 7],
 		);
 		let serialized = cti.serialize();
-		let deserialized = hpkencrypt::CmpdCti::deserialize(&serialized);
+		let deserialized = hpkencrypt::IlumCti::deserialize(&serialized);
 
 		assert_eq!(Ok(cti), deserialized);
 	}
@@ -700,7 +700,7 @@ mod tests {
 			svk: dilithium::PublicKey::new([78u8; 2592]),
 			signature: dilithium::Signature::new([90u8; 4595]),
 		};
-		let cti = hpkencrypt::CmpdCti::new(
+		let cti = hpkencrypt::IlumCti::new(
 			[123u8; 704],
 			aes_gcm::Iv([45u8; 12]),
 			vec![1, 2, 3, 4, 5, 6, 7],
@@ -723,7 +723,7 @@ mod tests {
 			svk: dilithium::PublicKey::new([78u8; 2592]),
 			signature: dilithium::Signature::new([90u8; 4595]),
 		};
-		let cti = hpkencrypt::CmpdCti::new(
+		let cti = hpkencrypt::IlumCti::new(
 			[123u8; 704],
 			aes_gcm::Iv([45u8; 12]),
 			vec![1, 2, 3, 4, 5, 6, 7],

@@ -21,7 +21,7 @@ pub struct Commit {
 	// committer new key package
 	pub kp: KeyPackage,
 	// key-independent, compound (multi-layered) encapsulation
-	pub cti: hpkencrypt::CmpdCti,
+	pub cti: hpkencrypt::IlumCti,
 	// proposal ids; order is important, so should be pre-sorted/validated
 	pub prop_ids: Vec<Id>,
 }

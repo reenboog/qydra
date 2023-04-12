@@ -11,12 +11,12 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct WlcmCti {
-	pub cti: hpkencrypt::CmpdCti,
+	pub cti: hpkencrypt::IlumCti,
 	pub sig: Signature,
 }
 
 impl WlcmCti {
-	pub fn new(cti: hpkencrypt::CmpdCti, sig: Signature) -> Self {
+	pub fn new(cti: hpkencrypt::IlumCti, sig: Signature) -> Self {
 		Self { cti, sig }
 	}
 }

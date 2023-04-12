@@ -570,8 +570,8 @@ impl Group {
 
 			let ek = self.roster.get(&self.user_id).unwrap().kp.ek;
 			let com_secret = CommitSecret::try_from(
-				hpkencrypt::decrypt(
-					&commit.cti.sym_ct,
+				hpkencrypt::ilum_decrypt(
+					&commit.cti.ct,
 					&commit.cti.cti,
 					ctd,
 					&self.seed,
@@ -629,7 +629,7 @@ impl Group {
 				.collect::<Vec<ilum::PublicKey>>();
 
 			// multilayering could be nice to have here
-			let encryption = hpkencrypt::encrypt(&info.serialize(), &self.seed, &keys);
+			let encryption = hpkencrypt::ilum_encrypt(&info.serialize(), &self.seed, &keys);
 			let to_sign = Sha256::digest(info.hash());
 			let sig = self.ssk.sign(&to_sign);
 			let cti = WlcmCti::new(encryption.cti, sig);
@@ -655,8 +655,8 @@ impl Group {
 		wd: &WlcmCtd,
 	) -> Result<Self, Error> {
 		let info = welcome::Info::deserialize(
-			&hpkencrypt::decrypt(
-				&wi.cti.sym_ct,
+			&hpkencrypt::ilum_decrypt(
+				&wi.cti.ct,
 				&wi.cti.cti,
 				&wd.ctd,
 				seed,
@@ -789,7 +789,7 @@ impl Group {
 	fn rekey(
 		&mut self,
 		receivers: &[Member],
-	) -> (CommitSecret, KeyPackage, hpkencrypt::Encryption) {
+	) -> (CommitSecret, KeyPackage, hpkencrypt::IlumEncrypted) {
 		let com_secret = rand::thread_rng().gen::<CommitSecret>();
 		let (kp, sk) = self.gen_kp();
 
@@ -802,7 +802,7 @@ impl Group {
 			.map(|m| m.kp.ek.clone())
 			.collect::<Vec<ilum::PublicKey>>();
 		// encrypt com_secret for all recipients including myself (though I'll ignore it when processing)
-		let encryption = hpkencrypt::encrypt(&com_secret, &self.seed, &keys);
+		let encryption = hpkencrypt::ilum_encrypt(&com_secret, &self.seed, &keys);
 
 		(com_secret, kp, encryption)
 	}

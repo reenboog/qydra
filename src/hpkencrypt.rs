@@ -3,39 +3,40 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
-	KeyPairMismatch,
+	IlumKeyPairMismatch,
+	EccKeyPairMismatch,
 	BadAesMaterial,
 	BadAesFormat,
+	BadEccKeyFormat,
 }
 
-pub struct Encryption {
+pub struct IlumEncrypted {
 	// key-independent encapsulation
-	pub cti: CmpdCti,
+	pub cti: IlumCti,
 	// key-dependent encapsulations
 	pub ctds: Vec<ilum::Ctd>,
 }
 
 // Compound, key-independent ciphertext
-// REVIEW: applies to CmPKEs only
 #[derive(Clone, Debug, PartialEq)]
-pub struct CmpdCti {
+pub struct IlumCti {
 	// key-independent encapsulation
 	pub cti: ilum::Cti,
 	// aes iv
-	pub iv: aes_gcm::Iv, // TODO: remove
-	// aes ciphertext
-	pub sym_ct: Vec<u8>,
+	pub iv: aes_gcm::Iv,
+	// aes ciphertext, encrypt eph key in the mixed mode; decrypted by combining Cti with Ctd (= aes key)
+	pub ct: Vec<u8>,
 }
 
-impl CmpdCti {
-	pub fn new(cti: ilum::Cti, iv: aes_gcm::Iv, sym_ct: Vec<u8>) -> Self {
-		Self { cti, iv, sym_ct }
+impl IlumCti {
+	pub fn new(cti: ilum::Cti, iv: aes_gcm::Iv, ct: Vec<u8>) -> Self {
+		Self { cti, iv, ct }
 	}
 }
 
-impl Hashable for CmpdCti {
+impl Hashable for IlumCti {
 	fn hash(&self) -> crate::hash::Hash {
-		Sha256::digest([self.cti.as_slice(), self.iv.as_bytes(), &self.sym_ct].concat()).into()
+		Sha256::digest([self.cti.as_slice(), self.iv.as_bytes(), &self.ct].concat()).into()
 	}
 }
 
@@ -56,32 +57,118 @@ fn aes_expand_key_iv(seed: &[u8]) -> aes_gcm::Aes {
 	aes_gcm::Aes::new_with_key_iv(key, iv)
 }
 
-// TODO: should expect a mixed PK type, eg CmpdPublicKey or something
-pub fn encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> Encryption {
+pub fn ilum_encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> IlumEncrypted {
 	let encapsulated = ilum::enc(seed, keys);
 	let aes_key = aes_expand_key(&encapsulated.ss);
 	let aes = aes_gcm::Aes::new_with_key(aes_key);
 	let ct = aes.encrypt(pt);
-	// eph = ecc_gen()
-	// hpkencrypt(eph + aes_key1)
-	// aes_key = ct + ecc_enc(ecc_key, eph, recipient_key)
-	// hpkencrypt(eph)
 
-	Encryption {
-		cti: CmpdCti::new(encapsulated.cti, aes.iv, ct),
+	IlumEncrypted {
+		cti: IlumCti::new(encapsulated.cti, aes.iv, ct),
 		ctds: encapsulated.ctds,
 	}
 }
 
+pub struct CmpdCtd {
+	ilum_ctd: ilum::Ctd,
+	ecc_ctd: EccCtd,
+}
+
+pub struct CmpdCti {
+	ct: Vec<u8>,
+	encrypted_eph_key: Vec<u8>,
+	iv: aes_gcm::Iv,
+	ilum_cti: ilum::Cti,
+}
+
+pub struct Encrypted {
+	pub cti: CmpdCti,
+	pub ctds: Vec<CmpdCtd>,
+}
+
+pub fn h_encrypt(
+	pt: &[u8],
+	seed: &ilum::Seed,
+	keys: &[(ilum::PublicKey, x448::PublicKey)],
+) -> Encrypted {
+	// this keeps the encrypted ct of pt
+	let EccEncrypted {
+		eph_key,
+		ct,
+		ctds: ecc_ctds,
+	} = ecc_encrypt(
+		pt,
+		&keys
+			.iter()
+			.map(|(_, key)| key.clone())
+			.collect::<Vec<x448::PublicKey>>(),
+	);
+
+	// encrypt the emphemeral key used by the step above
+	let IlumEncrypted {
+		cti,
+		ctds: ilum_ctds,
+	} = ilum_encrypt(
+		eph_key.as_bytes(),
+		seed,
+		&keys
+			.iter()
+			.map(|(key, _)| *key)
+			.collect::<Vec<ilum::PublicKey>>(),
+	);
+
+	let ctds = ecc_ctds
+		.into_iter()
+		.zip(ilum_ctds.into_iter())
+		.map(|(ecc_ctd, ilum_ctd)| CmpdCtd { ilum_ctd, ecc_ctd })
+		.collect();
+
+	Encrypted {
+		cti: CmpdCti {
+			ct,
+			encrypted_eph_key: cti.ct,
+			iv: cti.iv,
+			ilum_cti: cti.cti,
+		},
+		ctds,
+	}
+}
+
+pub fn h_decrypt(
+	cti: &CmpdCti,
+	ctd: &CmpdCtd,
+	seed: &ilum::Seed,
+	ilum_pk: &ilum::PublicKey,
+	ilum_sk: &ilum::SecretKey,
+	ecc_sk: &x448::PrivateKey,
+) -> Result<Vec<u8>, Error> {
+	let eph_key = ilum_decrypt(
+		&cti.encrypted_eph_key,
+		&cti.ilum_cti,
+		&ctd.ilum_ctd,
+		seed,
+		ilum_pk,
+		ilum_sk,
+		&cti.iv,
+	)?
+	.try_into()
+	.or(Err(Error::IlumKeyPairMismatch))?;
+
+	ecc_decrypt(&cti.ct, &ctd.ecc_ctd, ecc_sk, &eph_key)
+}
+
 type EccCtd = Vec<u8>;
 
-pub struct EccEncryption {
+pub struct EccEncrypted {
+	// ephemeral key used to dh with the supplied public keys
 	pub eph_key: x448::PublicKey,
+	// actual ct encrypted with randomly generated aes parameters (key, iv)
 	pub ct: Vec<u8>,
+	// aes key & iv encrypted to the supplied public keys by dh-ing each one with the generated eph key
 	pub ctds: Vec<EccCtd>,
 }
 
-pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncryption {
+pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncrypted {
 	// TODO: consider rayon for parallel dh operations
 
 	// generate a random aes key/iv pair
@@ -99,7 +186,7 @@ pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncryption {
 		})
 		.collect::<Vec<EccCtd>>();
 
-	EccEncryption {
+	EccEncrypted {
 		eph_key: eph_kp.public,
 		ct,
 		ctds,
@@ -113,14 +200,14 @@ pub fn ecc_decrypt(
 	eph_key: &x448::PublicKey,
 ) -> Result<Vec<u8>, Error> {
 	let outer_aes = aes_expand_key_iv(x448::dh_exchange(sk, eph_key).as_bytes());
-	let inner_aes_bytes = outer_aes.decrypt(&ctd).or(Err(Error::BadAesMaterial))?;
+	let inner_aes_bytes = outer_aes.decrypt(&ctd).or(Err(Error::EccKeyPairMismatch))?;
 	let inner_aes =
 		aes_gcm::Aes::try_from(inner_aes_bytes.as_ref()).or(Err(Error::BadAesFormat))?;
 
 	inner_aes.decrypt(ct).or(Err(Error::BadAesMaterial))
 }
 
-pub fn decrypt(
+pub fn ilum_decrypt(
 	ct: &[u8],
 	cti: &ilum::Cti,
 	ctd: &ilum::Ctd,
@@ -129,7 +216,7 @@ pub fn decrypt(
 	sk: &ilum::SecretKey,
 	iv: &aes_gcm::Iv,
 ) -> Result<Vec<u8>, Error> {
-	let ss = ilum::dec(cti, ctd, seed, pk, sk).ok_or(Error::KeyPairMismatch)?;
+	let ss = ilum::dec(cti, ctd, seed, pk, sk).ok_or(Error::IlumKeyPairMismatch)?;
 	let aes_key = aes_expand_key(&ss);
 
 	aes_gcm::Aes::new_with_key_iv(aes_key, iv.clone())
@@ -139,8 +226,11 @@ pub fn decrypt(
 
 #[cfg(test)]
 mod tests {
-	use super::{decrypt, ecc_decrypt, ecc_encrypt, encrypt, Error};
-	use crate::aes_gcm;
+	use super::{ecc_decrypt, ecc_encrypt, ilum_decrypt, ilum_encrypt, Error};
+	use crate::{
+		aes_gcm,
+		hpkencrypt::{h_decrypt, h_encrypt},
+	};
 
 	#[test]
 	fn test_encrypt_to_no_keys() {
@@ -148,22 +238,22 @@ mod tests {
 	}
 
 	#[test]
-	fn encrypt_decrypt() {
+	fn test_ilum_encrypt_decrypt() {
 		let seed = [123u8; 16];
 		let kps = (0..5)
 			.map(|_| ilum::gen_keypair(&seed))
 			.collect::<Vec<ilum::KeyPair>>();
 
 		let msg = b"Hey there";
-		let sealed = encrypt(
+		let sealed = ilum_encrypt(
 			msg,
 			&seed,
 			&kps.iter().map(|kp| kp.pk).collect::<Vec<ilum::PublicKey>>(),
 		);
 
 		kps.iter().enumerate().for_each(|(idx, kp)| {
-			let r = decrypt(
-				&sealed.cti.sym_ct,
+			let r = ilum_decrypt(
+				&sealed.cti.ct,
 				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
@@ -177,14 +267,14 @@ mod tests {
 	}
 
 	#[test]
-	fn decrypt_fails_for_wrong_keys() {
+	fn test_ilum_decrypt_fails_for_wrong_keys() {
 		let seed = [123u8; 16];
 		let kps = (0..5)
 			.map(|_| ilum::gen_keypair(&seed))
 			.collect::<Vec<ilum::KeyPair>>();
 
 		let msg = b"Hey there";
-		let sealed = encrypt(
+		let sealed = ilum_encrypt(
 			msg,
 			&seed,
 			&kps.iter().map(|kp| kp.pk).collect::<Vec<ilum::PublicKey>>(),
@@ -192,8 +282,8 @@ mod tests {
 
 		// fails for wrong sk
 		kps.iter().enumerate().for_each(|(idx, kp)| {
-			let r = decrypt(
-				&sealed.cti.sym_ct,
+			let r = ilum_decrypt(
+				&sealed.cti.ct,
 				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
@@ -202,13 +292,13 @@ mod tests {
 				&sealed.cti.iv,
 			);
 
-			assert_eq!(r, Err(Error::KeyPairMismatch));
+			assert_eq!(r, Err(Error::IlumKeyPairMismatch));
 		});
 
 		// fails for wrong pk
 		kps.iter().enumerate().for_each(|(idx, kp)| {
-			let r = decrypt(
-				&sealed.cti.sym_ct,
+			let r = ilum_decrypt(
+				&sealed.cti.ct,
 				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
@@ -217,19 +307,19 @@ mod tests {
 				&sealed.cti.iv,
 			);
 
-			assert_eq!(r, Err(Error::KeyPairMismatch));
+			assert_eq!(r, Err(Error::IlumKeyPairMismatch));
 		});
 	}
 
 	#[test]
-	fn decrypt_fails_for_wrong_iv() {
+	fn test_ilum_decrypt_fails_for_wrong_iv() {
 		let seed = [123u8; 16];
 		let kps = (0..5)
 			.map(|_| ilum::gen_keypair(&seed))
 			.collect::<Vec<ilum::KeyPair>>();
 
 		let msg = b"Hey there";
-		let sealed = encrypt(
+		let sealed = ilum_encrypt(
 			msg,
 			&seed,
 			&kps.iter().map(|kp| kp.pk).collect::<Vec<ilum::PublicKey>>(),
@@ -237,8 +327,8 @@ mod tests {
 
 		// fails for wrong iv
 		kps.iter().enumerate().for_each(|(idx, kp)| {
-			let r = decrypt(
-				&sealed.cti.sym_ct,
+			let r = ilum_decrypt(
+				&sealed.cti.ct,
 				&sealed.cti.cti,
 				&sealed.ctds[idx],
 				&seed,
@@ -278,5 +368,39 @@ mod tests {
 				)
 			);
 		});
+	}
+
+	#[test]
+	fn test_hpke_encrypt_decrypt() {
+		use crate::x448;
+		use ilum;
+
+		let seed = [123u8; 16];
+		let kps = (0..10)
+			.map(|_| (x448::KeyPair::generate(), ilum::gen_keypair(&seed)))
+			.collect::<Vec<(x448::KeyPair, ilum::KeyPair)>>();
+		let pt = b"hey there";
+
+		let encrypted = h_encrypt(
+			pt,
+			&seed,
+			&kps.iter()
+				.map(|(ecc, ilum)| (ilum.pk.clone(), ecc.public.clone()))
+				.collect::<Vec<(ilum::PublicKey, x448::PublicKey)>>(),
+		);
+
+		kps.iter().enumerate().for_each(|(idx, (ecc, ilum))| {
+			assert_eq!(
+				Ok(pt.to_vec()),
+				h_decrypt(
+					&encrypted.cti,
+					&encrypted.ctds[idx],
+					&seed,
+					&ilum.pk,
+					&ilum.sk,
+					&ecc.private
+				)
+			);
+		})
 	}
 }

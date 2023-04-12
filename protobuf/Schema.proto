@@ -88,6 +88,8 @@ enum ContentType {
 	Commt = 3;
 }
 
+// TODO: also send ctds
+
 message Ciphertext {
 	required ContentType content_type = 1;
 	required bytes content_id = 2;
