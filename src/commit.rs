@@ -21,7 +21,7 @@ pub struct Commit {
 	// committer new key package
 	pub kp: KeyPackage,
 	// key-independent, compound (multi-layered) encapsulation
-	pub cti: hpkencrypt::IlumCti,
+	pub cti: hpkencrypt::CmpdCti,
 	// proposal ids; order is important, so should be pre-sorted/validated
 	pub prop_ids: Vec<Id>,
 }
@@ -52,8 +52,6 @@ pub struct FramedCommit {
 	pub epoch: u64,
 	pub sender: Id,
 	pub commit: Commit,
-	// FIXME: should I use ECC inside instead, so that PQ would be applied to the outer layer while
-	// ECC will be used in the internal layer for efficiency?
 	pub sig: Signature, // do I need this? I could verify the encrypted content instead
 	// TODO: how about mac?
 	pub conf_tag: hmac::Digest,

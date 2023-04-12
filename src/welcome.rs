@@ -6,17 +6,16 @@ use crate::{
 	key_schedule::JoinerSecret,
 	roster::Roster,
 };
-use ilum::Ctd;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct WlcmCti {
-	pub cti: hpkencrypt::IlumCti,
+	pub cti: hpkencrypt::CmpdCti,
 	pub sig: Signature,
 }
 
 impl WlcmCti {
-	pub fn new(cti: hpkencrypt::IlumCti, sig: Signature) -> Self {
+	pub fn new(cti: hpkencrypt::CmpdCti, sig: Signature) -> Self {
 		Self { cti, sig }
 	}
 }
@@ -25,11 +24,11 @@ impl WlcmCti {
 pub struct WlcmCtd {
 	pub user_id: Id,
 	pub key_id: Id,
-	pub ctd: Ctd,
+	pub ctd: hpkencrypt::CmpdCtd,
 }
 
 impl WlcmCtd {
-	pub fn new(user_id: Id, key_id: Id, ctd: Ctd) -> Self {
+	pub fn new(user_id: Id, key_id: Id, ctd: hpkencrypt::CmpdCtd) -> Self {
 		Self {
 			user_id,
 			key_id,

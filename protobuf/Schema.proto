@@ -4,9 +4,10 @@ syntax = "proto2";
 package main;
 
 message KeyPackage {
-	required bytes ek = 1;
-	required bytes svk = 2;
-	required bytes signature = 3;
+	required bytes ilum_ek = 1;
+	required bytes x448_ek = 2;
+	required bytes svk = 3;
+	required bytes sig = 4;
 }
 
 message Member {
@@ -62,9 +63,14 @@ message FramedProposal {
 }
 
 message CmpdCti {
-	required bytes cti = 1;
-	required bytes iv = 2;
-	required bytes sym_ct = 3;
+	// encrypted payload
+	required bytes ct = 1;
+	// encrypted x448 key used to encrypt the payload
+	required bytes encrypted_eph_key = 2;
+	// iv used to encrypt the x448 key
+	required bytes iv = 3;
+	// ilum key-independent ct used to encrypt the x448 key (should be combined with its corresponding ctd part to decrypt)
+	required bytes ilum_cti = 4;
 }
 
 message Commit {
@@ -88,7 +94,7 @@ enum ContentType {
 	Commt = 3;
 }
 
-// TODO: also send ctds
+// TODO: also send cmpd ctds (proposals, commits, welcomes)
 
 message Ciphertext {
 	required ContentType content_type = 1;

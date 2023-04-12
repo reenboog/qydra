@@ -24,19 +24,13 @@ pub struct IlumCti {
 	pub cti: ilum::Cti,
 	// aes iv
 	pub iv: aes_gcm::Iv,
-	// aes ciphertext, encrypt eph key in the mixed mode; decrypted by combining Cti with Ctd (= aes key)
+	// aes ciphertext, encrypted eph key in the mixed mode; decrypts by combining Cti with Ctd (= aes key)
 	pub ct: Vec<u8>,
 }
 
 impl IlumCti {
 	pub fn new(cti: ilum::Cti, iv: aes_gcm::Iv, ct: Vec<u8>) -> Self {
 		Self { cti, iv, ct }
-	}
-}
-
-impl Hashable for IlumCti {
-	fn hash(&self) -> crate::hash::Hash {
-		Sha256::digest([self.cti.as_slice(), self.iv.as_bytes(), &self.ct].concat()).into()
 	}
 }
 
@@ -69,16 +63,66 @@ pub fn ilum_encrypt(pt: &[u8], seed: &ilum::Seed, keys: &[ilum::PublicKey]) -> I
 	}
 }
 
+pub fn ilum_decrypt(
+	ct: &[u8],
+	cti: &ilum::Cti,
+	ctd: &ilum::Ctd,
+	seed: &ilum::Seed,
+	pk: &ilum::PublicKey,
+	sk: &ilum::SecretKey,
+	iv: &aes_gcm::Iv,
+) -> Result<Vec<u8>, Error> {
+	let ss = ilum::dec(cti, ctd, seed, pk, sk).ok_or(Error::IlumKeyPairMismatch)?;
+	let aes_key = aes_expand_key(&ss);
+
+	aes_gcm::Aes::new_with_key_iv(aes_key, iv.clone())
+		.decrypt(ct)
+		.or(Err(Error::BadAesMaterial))
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CmpdCtd {
 	ilum_ctd: ilum::Ctd,
 	ecc_ctd: EccCtd,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct CmpdCti {
-	ct: Vec<u8>,
-	encrypted_eph_key: Vec<u8>,
-	iv: aes_gcm::Iv,
-	ilum_cti: ilum::Cti,
+	pub ct: Vec<u8>,
+	pub encrypted_eph_key: Vec<u8>,
+	pub iv: aes_gcm::Iv,
+	pub ilum_cti: ilum::Cti,
+}
+
+impl CmpdCti {
+	pub fn new(
+		ct: Vec<u8>,
+		encrypted_eph_key: Vec<u8>,
+		iv: aes_gcm::Iv,
+		ilum_cti: ilum::Cti,
+	) -> Self {
+		Self {
+			ct,
+			encrypted_eph_key,
+			iv,
+			ilum_cti,
+		}
+	}
+}
+
+impl Hashable for CmpdCti {
+	fn hash(&self) -> crate::hash::Hash {
+		Sha256::digest(
+			[
+				self.ct.as_slice(),
+				self.encrypted_eph_key.as_slice(),
+				self.iv.as_bytes(),
+				&self.ilum_cti.as_slice(),
+			]
+			.concat(),
+		)
+		.into()
+	}
 }
 
 pub struct Encrypted {
@@ -86,7 +130,7 @@ pub struct Encrypted {
 	pub ctds: Vec<CmpdCtd>,
 }
 
-pub fn h_encrypt(
+pub fn encrypt(
 	pt: &[u8],
 	seed: &ilum::Seed,
 	keys: &[(ilum::PublicKey, x448::PublicKey)],
@@ -134,7 +178,7 @@ pub fn h_encrypt(
 	}
 }
 
-pub fn h_decrypt(
+pub fn decrypt(
 	cti: &CmpdCti,
 	ctd: &CmpdCtd,
 	seed: &ilum::Seed,
@@ -207,29 +251,12 @@ pub fn ecc_decrypt(
 	inner_aes.decrypt(ct).or(Err(Error::BadAesMaterial))
 }
 
-pub fn ilum_decrypt(
-	ct: &[u8],
-	cti: &ilum::Cti,
-	ctd: &ilum::Ctd,
-	seed: &ilum::Seed,
-	pk: &ilum::PublicKey,
-	sk: &ilum::SecretKey,
-	iv: &aes_gcm::Iv,
-) -> Result<Vec<u8>, Error> {
-	let ss = ilum::dec(cti, ctd, seed, pk, sk).ok_or(Error::IlumKeyPairMismatch)?;
-	let aes_key = aes_expand_key(&ss);
-
-	aes_gcm::Aes::new_with_key_iv(aes_key, iv.clone())
-		.decrypt(ct)
-		.or(Err(Error::BadAesMaterial))
-}
-
 #[cfg(test)]
 mod tests {
 	use super::{ecc_decrypt, ecc_encrypt, ilum_decrypt, ilum_encrypt, Error};
 	use crate::{
 		aes_gcm,
-		hpkencrypt::{h_decrypt, h_encrypt},
+		hpkencrypt::{decrypt, encrypt},
 	};
 
 	#[test]
@@ -381,7 +408,7 @@ mod tests {
 			.collect::<Vec<(x448::KeyPair, ilum::KeyPair)>>();
 		let pt = b"hey there";
 
-		let encrypted = h_encrypt(
+		let encrypted = encrypt(
 			pt,
 			&seed,
 			&kps.iter()
@@ -392,7 +419,7 @@ mod tests {
 		kps.iter().enumerate().for_each(|(idx, (ecc, ilum))| {
 			assert_eq!(
 				Ok(pt.to_vec()),
-				h_decrypt(
+				decrypt(
 					&encrypted.cti,
 					&encrypted.ctds[idx],
 					&seed,

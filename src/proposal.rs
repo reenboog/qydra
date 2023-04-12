@@ -73,8 +73,6 @@ pub struct FramedProposal {
 	pub epoch: u64,
 	pub sender: Id,
 	pub prop: Proposal,
-	// FIXME: should I use ECC inside instead, so that PQ would be applied to the outer layer while
-	// ECC will be used in the internal layer for efficiency?
 	pub sig: Signature, // signed with ssk (not updated upon rekey currently); do I need this as well? I could verify the encrypted content instead
 	pub mac: Digest,    // do I need this? I'll be encrypting this prop anyway
 	pub nonce: Nonce, // mixed with the mac_key to prevent key reuse; but should it be mac-ed with a hs chain actually?

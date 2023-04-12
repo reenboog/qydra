@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ilum::*;
+// use ilum::*;
 use rand::Rng;
 
 use crate::ciphertext::{Ciphertext, ContentType};
@@ -19,6 +19,7 @@ use crate::serializable::{Deserializable, Serializable};
 use crate::treemath::LeafIndex;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
+use crate::x448;
 use crate::{aes_gcm, dilithium, hkdf, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
@@ -72,7 +73,6 @@ pub enum Error {
 }
 
 // TODO: include Config?
-// TODO: add padding?
 
 // group state
 #[derive(Clone)]
@@ -97,7 +97,8 @@ pub struct Group {
 	// my id
 	user_id: Id,
 	// my decryption key
-	dk: ilum::SecretKey,
+	ilum_dk: ilum::SecretKey,
+	x448_dk: x448::PrivateKey,
 	// my signature verificatin key
 	ssk: dilithium::PrivateKey,
 
@@ -109,13 +110,14 @@ pub struct Group {
 pub struct Owner {
 	id: Id,
 	kp: KeyPackage,
-	dk: ilum::SecretKey,
+	ilum_dk: ilum::SecretKey,
+	x448_dk: x448::PrivateKey,
 	ssk: dilithium::PrivateKey,
 }
 
 impl Group {
 	// generates a group owned by owner; recipients should use a different initializer!
-	pub fn create(seed: Seed, owner: Owner) -> Self {
+	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
 		let roster = Roster::from(Member::new(owner.id, owner.kp));
 		let uid = rand::thread_rng().gen::<Hash>();
 		let epoch = 0;
@@ -142,7 +144,8 @@ impl Group {
 
 			user_id: owner.id,
 
-			dk: owner.dk, // TODO: introduce ecc keys as well
+			ilum_dk: owner.ilum_dk,
+			x448_dk: owner.x448_dk,
 			ssk: owner.ssk,
 
 			secrets,
@@ -187,9 +190,9 @@ impl Group {
 	}
 
 	pub fn propose_update(&mut self) -> (FramedProposal, Ciphertext) {
-		let (kp, sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk) = self.gen_kp();
 		let (fp, ct) = self.frame_proposal(Proposal::Update { kp });
-		let pu = PendingUpdate::new(sk, self.ssk.clone()); // TODO: make update ssk as well
+		let pu = PendingUpdate::new(ilum_sk, x448_sk, self.ssk.clone()); // TODO: make update ssk as well
 
 		self.pending_updates.insert(fp.id(), pu);
 
@@ -201,9 +204,11 @@ impl Group {
 		T: Identifiable + Serializable,
 	{
 		let sender = self.user_id;
-		let msg_id = pt.id();
+		let content_id = pt.id();
+		// TODO: we should not be here unless we're in the group, but Result could be used instead of unwrap
 		let leaf = self.roster.idx(sender).unwrap();
 		let chain_tree = self.secrets.chain_tree_for_message_type(content_type);
+		// TODO: get_next can not fail here, but Result could be used as well
 		let (key, gen) = chain_tree.get_next(LeafIndex(leaf)).unwrap();
 		let material = hkdf::Hkdf::from_ikm(&key.0)
 			.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
@@ -218,7 +223,7 @@ impl Group {
 			[
 				self.ctx().as_slice(),
 				sender.as_bytes(),
-				msg_id.as_bytes(),
+				content_id.as_bytes(),
 				&ct,
 			]
 			.concat(),
@@ -229,7 +234,7 @@ impl Group {
 
 		Ciphertext {
 			content_type,
-			content_id: msg_id,
+			content_id,
 			sender,
 			guid: self.uid,
 			epoch: self.epoch,
@@ -241,7 +246,7 @@ impl Group {
 		}
 	}
 
-	fn decrypt<T>(&mut self, ct: Ciphertext) -> Result<T, Error>
+	pub fn decrypt<T>(&mut self, ct: Ciphertext) -> Result<T, Error>
 	where
 		T: Deserializable,
 	{
@@ -251,7 +256,7 @@ impl Group {
 				[
 					self.ctx().as_slice(),
 					sender.id.as_bytes(),
-					&ct.content_id.0,
+					ct.content_id.as_bytes(),
 					&ct.payload,
 				]
 				.concat(),
@@ -354,7 +359,7 @@ impl Group {
 	fn verify_unframe_proposals(&self, fps: &[FramedProposal]) -> Vec<UnframedProposal> {
 		// keep only authenticated props: verify guid, epoch, signature, mac and roster
 		// if we were to fail in case of an invalid proposal, a malicious party (including the backend) could
-		// sabotage the group by sending garbage; instead filtering is to be used
+		// sabotage the group by sending garbage; instead filtering is to be relied on
 		fps.iter()
 			.filter_map(|fp| self.verify_unframe_proposal(fp).ok())
 			.collect::<Vec<UnframedProposal>>()
@@ -395,28 +400,27 @@ impl Group {
 		}
 	}
 
-	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey) {
+	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey, x448::PrivateKey) {
 		// TODO: update signing key as well
-		let kp = ilum::gen_keypair(&self.seed);
+		let ilum_kp = ilum::gen_keypair(&self.seed);
+		let x448_kp = x448::KeyPair::generate();
 		let package = KeyPackage::new(
-			&kp.pk,
-			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap; derive pk from sk instead?
+			&ilum_kp.pk,
+			&x448_kp.public,
+			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap; derive pk from sk instead? (dilithium crate needs to be changed then)
 			&self.ssk,
 		);
 
-		(package, kp.sk)
+		(package, ilum_kp.sk, x448_kp.private)
 	}
 
-	// FramedCommit contains Cti; hence, the whole fc can be encrypted with the current hs chain
-	// should it be mac-ed with a dedicated hs chain available to the server to auth uploads? But why?
-	// recipients need to verify them anyway.
 	pub fn commit(
 		&mut self,
 		fps: &[FramedProposal],
 	) -> Result<
 		(
 			FramedCommit,
-			Vec<(Id, Option<Ctd>)>,
+			Vec<(Id, Option<hpkencrypt::CmpdCtd>)>,
 			Option<(WlcmCti, Vec<WlcmCtd>)>,
 		),
 		Error,
@@ -491,13 +495,13 @@ impl Group {
 				(
 					id.clone(),
 					if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
-						Some(encryption.ctds[idx])
+						Some(encryption.ctds[idx].clone())
 					} else {
 						None
 					},
 				)
 			})
-			.collect::<Vec<(Id, Option<Ctd>)>>();
+			.collect::<Vec<(Id, Option<hpkencrypt::CmpdCtd>)>>();
 
 		let welcomes = new.welcome(&to_welcome, &joiner_secret, &conf_tag);
 
@@ -509,6 +513,7 @@ impl Group {
 			},
 		);
 
+		// FIXME: send this
 		let ct = self.encrypt(&framed_commit, ContentType::Commit);
 
 		// TODO: encrypt fc and return alongside with framed_commit
@@ -518,7 +523,7 @@ impl Group {
 	pub fn process(
 		&self,
 		fc: &FramedCommit,
-		ctd: &ilum::Ctd,
+		ctd: &hpkencrypt::CmpdCtd,
 		fps: &[FramedProposal],
 	) -> Result<Option<Group>, Error> {
 		// verify group, epoch, membership and the signature first
@@ -568,16 +573,15 @@ impl Group {
 
 			new.conf_trans_hash = self.derive_conf_trans_hash(&sender, &commit, &sig);
 
-			let ek = self.roster.get(&self.user_id).unwrap().kp.ek;
+			let ilum_ek = self.roster.get(&self.user_id).unwrap().kp.ilum_ek;
 			let com_secret = CommitSecret::try_from(
-				hpkencrypt::ilum_decrypt(
-					&commit.cti.ct,
-					&commit.cti.cti,
+				hpkencrypt::decrypt(
+					&commit.cti,
 					ctd,
 					&self.seed,
-					&ek,
-					&self.dk,
-					&commit.cti.iv,
+					&ilum_ek,
+					&self.ilum_dk,
+					&self.x448_dk,
 				)
 				.or(Err(Error::HpkeDecryptFailed))?,
 			)
@@ -625,18 +629,17 @@ impl Group {
 			);
 			let keys = invited
 				.iter()
-				.map(|m| m.kp.ek)
-				.collect::<Vec<ilum::PublicKey>>();
+				.map(|m| (m.kp.ilum_ek.clone(), m.kp.x448_ek.clone()))
+				.collect::<Vec<(ilum::PublicKey, x448::PublicKey)>>();
 
-			// multilayering could be nice to have here
-			let encryption = hpkencrypt::ilum_encrypt(&info.serialize(), &self.seed, &keys);
+			let encryption = hpkencrypt::encrypt(&info.serialize(), &self.seed, &keys);
 			let to_sign = Sha256::digest(info.hash());
 			let sig = self.ssk.sign(&to_sign);
 			let cti = WlcmCti::new(encryption.cti, sig);
 			let ctds = invited
 				.iter()
 				.enumerate()
-				.map(|(idx, m)| WlcmCtd::new(m.id, m.kp.id(), encryption.ctds[idx]))
+				.map(|(idx, m)| WlcmCtd::new(m.id, m.kp.id(), encryption.ctds[idx].clone()))
 				.collect();
 
 			Some((cti, ctds))
@@ -648,23 +651,16 @@ impl Group {
 	pub fn join(
 		id: &Id,
 		kp: &KeyPackage,
-		dk: &ilum::SecretKey,
+		ilum_dk: &ilum::SecretKey,
+		x448_dk: &x448::PrivateKey,
 		ssk: &dilithium::PrivateKey,
-		seed: &Seed,
+		seed: &ilum::Seed,
 		wi: &WlcmCti,
 		wd: &WlcmCtd,
 	) -> Result<Self, Error> {
 		let info = welcome::Info::deserialize(
-			&hpkencrypt::ilum_decrypt(
-				&wi.cti.ct,
-				&wi.cti.cti,
-				&wd.ctd,
-				seed,
-				&kp.ek,
-				&dk,
-				&wi.cti.iv,
-			)
-			.or(Err(Error::HpkeDecryptFailed))?,
+			&hpkencrypt::decrypt(&wi.cti, &wd.ctd, seed, &kp.ilum_ek, &ilum_dk, x448_dk)
+				.or(Err(Error::HpkeDecryptFailed))?,
 		)
 		.or(Err(Error::WrongWelcomeFormat))?;
 
@@ -717,7 +713,8 @@ impl Group {
 			pending_updates: HashMap::new(),
 			pending_commits: HashMap::new(),
 			user_id: id.clone(),
-			dk: dk.clone(),
+			ilum_dk: ilum_dk.clone(),
+			x448_dk: x448_dk.clone(),
 			ssk: ssk.clone(),
 			secrets,
 		};
@@ -786,25 +783,23 @@ impl Group {
 	}
 
 	// TODO: return (com, kp, enc) and apply instead of state change?
-	fn rekey(
-		&mut self,
-		receivers: &[Member],
-	) -> (CommitSecret, KeyPackage, hpkencrypt::IlumEncrypted) {
+	fn rekey(&mut self, receivers: &[Member]) -> (CommitSecret, KeyPackage, hpkencrypt::Encrypted) {
 		let com_secret = rand::thread_rng().gen::<CommitSecret>();
-		let (kp, sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk) = self.gen_kp();
 
 		// TODO: update ssk/svk as well; should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
 		_ = self.roster.set(&self.user_id, &kp);
-		self.dk = sk;
+		self.ilum_dk = ilum_sk;
+		self.x448_dk = x448_sk;
 
 		let keys = receivers
 			.iter()
-			.map(|m| m.kp.ek.clone())
-			.collect::<Vec<ilum::PublicKey>>();
+			.map(|m| (m.kp.ilum_ek.clone(), m.kp.x448_ek.clone()))
+			.collect::<Vec<(ilum::PublicKey, x448::PublicKey)>>();
 		// encrypt com_secret for all recipients including myself (though I'll ignore it when processing)
-		let encryption = hpkencrypt::ilum_encrypt(&com_secret, &self.seed, &keys);
+		let encrypted = hpkencrypt::encrypt(&com_secret, &self.seed, &keys);
 
-		(com_secret, kp, encryption)
+		(com_secret, kp, encrypted)
 	}
 
 	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
@@ -855,7 +850,8 @@ impl Group {
 						if sender == new.user_id {
 							if let Some(pu) = self.pending_updates.get(&fp_id) {
 								new.ssk = pu.ssk.clone();
-								new.dk = pu.dk;
+								new.ilum_dk = pu.ilum_dk;
+								new.x448_dk = pu.x448_dk.clone();
 							} else {
 								// this breaks the whole state: it seems to be my own update, kp is validated, sig & mac are ok,
 								// but I can't find this update's private keys which means I won't be able to decrypt upcoming commits; re-init required
@@ -949,7 +945,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
 	use super::{Group, Owner};
-	use crate::{dilithium, id::Id, key_package::KeyPackage};
+	use crate::{dilithium, id::Id, key_package::KeyPackage, x448};
 
 	#[test]
 	fn test_next() {
@@ -976,11 +972,18 @@ mod tests {
 	fn test_create_add_group() {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_x448_kp = x448::KeyPair::generate();
 		let alice_skp = dilithium::KeyPair::generate();
 		let alice = Owner {
 			id: Id([1u8; 32]),
-			kp: KeyPackage::new(&alice_ekp.pk, &alice_skp.public, &alice_skp.private),
-			dk: alice_ekp.sk,
+			kp: KeyPackage::new(
+				&alice_ekp.pk,
+				&alice_x448_kp.public,
+				&alice_skp.public,
+				&alice_skp.private,
+			),
+			ilum_dk: alice_ekp.sk,
+			x448_dk: alice_x448_kp.private,
 			ssk: alice_skp.private,
 		};
 
@@ -988,9 +991,11 @@ mod tests {
 
 		let bob_user_id = Id([34u8; 32]);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_x448_kp = x448::KeyPair::generate();
 		let bob_user_skp = dilithium::KeyPair::generate();
 		let bob_user_kp = KeyPackage::new(
 			&bob_user_ekp.pk,
+			&bob_x448_kp.public,
 			&bob_user_skp.public,
 			&bob_user_skp.private,
 		);
@@ -1000,7 +1005,11 @@ mod tests {
 
 		// and get alice_group
 		let alice_group = group
-			.process(&fc, &ctds.get(0).unwrap().1.unwrap(), &[add_bob_prop])
+			.process(
+				&fc,
+				&ctds.get(0).unwrap().1.clone().unwrap(),
+				&[add_bob_prop],
+			)
 			.unwrap()
 			.unwrap();
 
@@ -1009,6 +1018,7 @@ mod tests {
 			&bob_user_id,
 			&bob_user_kp,
 			&bob_user_ekp.sk,
+			&bob_x448_kp.private,
 			&bob_user_skp.private,
 			&seed,
 			&wlcms.clone().unwrap().0,
@@ -1033,9 +1043,11 @@ mod tests {
 
 		let charlie_user_id = Id([56u8; 32]);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
+		let charlie_x448_kp = x448::KeyPair::generate();
 		let charlie_user_skp = dilithium::KeyPair::generate();
 		let charlie_user_kp = KeyPackage::new(
 			&charlie_user_ekp.pk,
+			&charlie_x448_kp.public,
 			&charlie_user_skp.public,
 			&charlie_user_skp.private,
 		);
@@ -1050,14 +1062,18 @@ mod tests {
 		let alice_group = alice_group
 			.process(
 				&fc,
-				&ctds.get(0).unwrap().1.unwrap(),
+				&ctds.get(0).unwrap().1.clone().unwrap(),
 				&[add_charlie_prop.clone()],
 			)
 			.unwrap()
 			.unwrap();
 		// bob processes
 		let bob_group = bob_group
-			.process(&fc, &ctds.get(1).unwrap().1.unwrap(), &[add_charlie_prop])
+			.process(
+				&fc,
+				&ctds.get(1).unwrap().1.clone().unwrap(),
+				&[add_charlie_prop],
+			)
 			.unwrap()
 			.unwrap();
 		// charlie joins
@@ -1065,6 +1081,7 @@ mod tests {
 			&charlie_user_id,
 			&charlie_user_kp,
 			&charlie_user_ekp.sk,
+			&charlie_x448_kp.private,
 			&charlie_user_skp.private,
 			&seed,
 			&wlcms.clone().unwrap().0,

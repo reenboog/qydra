@@ -110,6 +110,7 @@ mod tests {
 		id::Id,
 		key_package::KeyPackage,
 		member::Member,
+		x448,
 	};
 
 	#[test]
@@ -117,9 +118,10 @@ mod tests {
 		let r = Roster::from(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 
@@ -135,9 +137,10 @@ mod tests {
 			.add(Member::new(
 				Id([12u8; 32]),
 				KeyPackage {
-					ek: [34u8; 768],
+					ilum_ek: [34u8; 768],
+					x448_ek: x448::PublicKey::from(&[1u8; 56]),
 					svk: PublicKey::new([56u8; 2592]),
-					signature: Signature::new([78u8; 4595]),
+					sig: Signature::new([78u8; 4595]),
 				},
 			))
 			.is_ok());
@@ -146,9 +149,10 @@ mod tests {
 			.add(Member::new(
 				Id([12u8; 32]),
 				KeyPackage {
-					ek: [56u8; 768],
+					ilum_ek: [56u8; 768],
+					x448_ek: x448::PublicKey::from(&[1u8; 56]),
 					svk: PublicKey::new([78u8; 2592]),
-					signature: Signature::new([90u8; 4595]),
+					sig: Signature::new([90u8; 4595]),
 				},
 			))
 			.is_err());
@@ -159,18 +163,20 @@ mod tests {
 		let mut roster = Roster::from(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 
 		_ = roster.add(Member::new(
 			Id([99u8; 32]),
 			KeyPackage {
-				ek: [22u8; 768],
+				ilum_ek: [22u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([33u8; 2592]),
-				signature: Signature::new([77u8; 4595]),
+				sig: Signature::new([77u8; 4595]),
 			},
 		));
 
@@ -200,9 +206,10 @@ mod tests {
 		_ = roster.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 
@@ -212,9 +219,10 @@ mod tests {
 		_ = roster.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 
@@ -230,18 +238,20 @@ mod tests {
 		_ = r1.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 
 		_ = r1.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
-				ek: [56u8; 768],
+				ilum_ek: [56u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([78u8; 2592]),
-				signature: Signature::new([90u8; 4595]),
+				sig: Signature::new([90u8; 4595]),
 			},
 		));
 
@@ -251,18 +261,20 @@ mod tests {
 		_ = r2.add(Member::new(
 			Id([34u8; 32]),
 			KeyPackage {
-				ek: [56u8; 768],
+				ilum_ek: [56u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([78u8; 2592]),
-				signature: Signature::new([90u8; 4595]),
+				sig: Signature::new([90u8; 4595]),
 			},
 		));
 
 		_ = r2.add(Member::new(
 			Id([12u8; 32]),
 			KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; 2592]),
-				signature: Signature::new([78u8; 4595]),
+				sig: Signature::new([78u8; 4595]),
 			},
 		));
 

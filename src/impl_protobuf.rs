@@ -11,6 +11,7 @@ use prost::Message;
 pub enum Error {
 	BadFormat,
 	WrongIlumKeySize,
+	WrongX448KeySize,
 	WrongDilithiumKeySize,
 	WrongDilithiumSigSize,
 	WrongIdSize,
@@ -39,9 +40,10 @@ pub enum Error {
 impl From<&key_package::KeyPackage> for KeyPackage {
 	fn from(val: &key_package::KeyPackage) -> Self {
 		Self {
-			ek: val.ek.to_vec(),
+			ilum_ek: val.ilum_ek.to_vec(),
+			x448_ek: val.x448_ek.as_bytes().to_vec(),
 			svk: val.svk.as_bytes().to_vec(),
-			signature: val.signature.as_bytes().to_vec(),
+			sig: val.sig.as_bytes().to_vec(),
 		}
 	}
 }
@@ -57,12 +59,11 @@ impl TryFrom<KeyPackage> for key_package::KeyPackage {
 
 	fn try_from(val: KeyPackage) -> Result<Self, Self::Error> {
 		Ok(Self {
-			ek: val.ek.try_into().or(Err(Error::WrongIlumKeySize))?,
+			ilum_ek: val.ilum_ek.try_into().or(Err(Error::WrongIlumKeySize))?,
+			x448_ek: val.x448_ek.try_into().or(Err(Error::WrongX448KeySize))?,
 			svk: dilithium::PublicKey::try_from(val.svk).or(Err(Error::WrongDilithiumKeySize))?,
-			signature: dilithium::Signature::new(
-				val.signature
-					.try_into()
-					.or(Err(Error::WrongDilithiumSigSize))?,
+			sig: dilithium::Signature::new(
+				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
 			),
 		})
 	}
@@ -317,35 +318,37 @@ impl Deserializable for proposal::FramedProposal {
 }
 
 // CmpdCti
-impl From<&hpkencrypt::IlumCti> for CmpdCti {
-	fn from(val: &hpkencrypt::IlumCti) -> Self {
+impl From<&hpkencrypt::CmpdCti> for CmpdCti {
+	fn from(val: &hpkencrypt::CmpdCti) -> Self {
 		Self {
-			cti: val.cti.to_vec(),
+			ct: val.ct.clone(),
+			encrypted_eph_key: val.encrypted_eph_key.clone(),
 			iv: val.iv.as_bytes().to_vec(),
-			sym_ct: val.ct.to_vec(),
+			ilum_cti: val.ilum_cti.to_vec(),
 		}
 	}
 }
 
-impl Serializable for hpkencrypt::IlumCti {
+impl Serializable for hpkencrypt::CmpdCti {
 	fn serialize(&self) -> Vec<u8> {
 		CmpdCti::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<CmpdCti> for hpkencrypt::IlumCti {
+impl TryFrom<CmpdCti> for hpkencrypt::CmpdCti {
 	type Error = Error;
 
 	fn try_from(val: CmpdCti) -> Result<Self, Self::Error> {
 		Ok(Self::new(
-			val.cti.try_into().or(Err(Error::WrongCtiSize))?,
+			val.ct,
+			val.encrypted_eph_key,
 			aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
-			val.sym_ct,
+			val.ilum_cti.try_into().or(Err(Error::WrongCtiSize))?,
 		))
 	}
 }
 
-impl Deserializable for hpkencrypt::IlumCti {
+impl Deserializable for hpkencrypt::CmpdCti {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -553,14 +556,17 @@ mod tests {
 		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
 		proposal, roster,
 		serializable::{Deserializable, Serializable},
+		x448,
 	};
 
 	#[test]
 	fn test_key_package() {
 		let seed = b"1234567890abcdef";
 		let e_kp = ilum::gen_keypair(seed);
+		let x448_kp = x448::KeyPair::generate();
 		let s_kp = dilithium::KeyPair::generate();
-		let pack = key_package::KeyPackage::new(&e_kp.pk, &s_kp.public, &s_kp.private);
+		let pack =
+			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let serialized = pack.serialize();
 		let deserialized = key_package::KeyPackage::deserialize(&serialized);
 
@@ -571,8 +577,10 @@ mod tests {
 	fn test_member() {
 		let seed = b"1234567890abcdef";
 		let e_kp = ilum::gen_keypair(seed);
+		let x448_kp = x448::KeyPair::generate();
 		let s_kp = dilithium::KeyPair::generate();
-		let pack = key_package::KeyPackage::new(&e_kp.pk, &s_kp.public, &s_kp.private);
+		let pack =
+			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let member = member::Member::new(id::Id([42u8; 32]), pack);
 		let serialized = member.serialize();
 		let deserialized = member::Member::deserialize(&serialized);
@@ -587,27 +595,30 @@ mod tests {
 		_ = r.add(member::Member::new(
 			id::Id([12u8; 32]),
 			key_package::KeyPackage {
-				ek: [34u8; 768],
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::KeyPair::generate().public,
 				svk: dilithium::PublicKey::new([56u8; 2592]),
-				signature: dilithium::Signature::new([78u8; 4595]),
+				sig: dilithium::Signature::new([78u8; 4595]),
 			},
 		));
 
 		_ = r.add(member::Member::new(
 			id::Id([34u8; 32]),
 			key_package::KeyPackage {
-				ek: [56u8; 768],
+				ilum_ek: [56u8; 768],
+				x448_ek: x448::KeyPair::generate().public,
 				svk: dilithium::PublicKey::new([78u8; 2592]),
-				signature: dilithium::Signature::new([90u8; 4595]),
+				sig: dilithium::Signature::new([90u8; 4595]),
 			},
 		));
 
 		_ = r.add(member::Member::new(
 			id::Id([56u8; 32]),
 			key_package::KeyPackage {
-				ek: [78u8; 768],
+				ilum_ek: [78u8; 768],
+				x448_ek: x448::KeyPair::generate().public,
 				svk: dilithium::PublicKey::new([90u8; 2592]),
-				signature: dilithium::Signature::new([12u8; 4595]),
+				sig: dilithium::Signature::new([12u8; 4595]),
 			},
 		));
 
@@ -622,9 +633,10 @@ mod tests {
 		use proposal::Proposal;
 
 		let kp = key_package::KeyPackage {
-			ek: [56u8; 768],
+			ilum_ek: [56u8; 768],
+			x448_ek: x448::KeyPair::generate().public,
 			svk: dilithium::PublicKey::new([78u8; 2592]),
-			signature: dilithium::Signature::new([90u8; 4595]),
+			sig: dilithium::Signature::new([90u8; 4595]),
 		};
 
 		let prop = Proposal::Remove {
@@ -656,9 +668,10 @@ mod tests {
 		use proposal::Proposal;
 
 		let kp = key_package::KeyPackage {
-			ek: [56u8; 768],
+			ilum_ek: [56u8; 768],
+			x448_ek: x448::KeyPair::generate().public,
 			svk: dilithium::PublicKey::new([78u8; 2592]),
-			signature: dilithium::Signature::new([90u8; 4595]),
+			sig: dilithium::Signature::new([90u8; 4595]),
 		};
 		let prop = Proposal::Add {
 			id: id::Id([15u8; 32]),
@@ -682,13 +695,14 @@ mod tests {
 
 	#[test]
 	fn test_cmpd_cti() {
-		let cti = hpkencrypt::IlumCti::new(
-			[123u8; 704],
-			aes_gcm::Iv([45u8; 12]),
+		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
 		);
 		let serialized = cti.serialize();
-		let deserialized = hpkencrypt::IlumCti::deserialize(&serialized);
+		let deserialized = hpkencrypt::CmpdCti::deserialize(&serialized);
 
 		assert_eq!(Ok(cti), deserialized);
 	}
@@ -696,14 +710,16 @@ mod tests {
 	#[test]
 	fn test_commit() {
 		let kp = key_package::KeyPackage {
-			ek: [56u8; 768],
+			ilum_ek: [56u8; 768],
+			x448_ek: x448::KeyPair::generate().public,
 			svk: dilithium::PublicKey::new([78u8; 2592]),
-			signature: dilithium::Signature::new([90u8; 4595]),
+			sig: dilithium::Signature::new([90u8; 4595]),
 		};
-		let cti = hpkencrypt::IlumCti::new(
-			[123u8; 704],
-			aes_gcm::Iv([45u8; 12]),
+		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
 		);
 		let commit = commit::Commit {
 			kp,
@@ -719,14 +735,16 @@ mod tests {
 	#[test]
 	fn test_framed_commit() {
 		let kp = key_package::KeyPackage {
-			ek: [56u8; 768],
+			ilum_ek: [56u8; 768],
+			x448_ek: x448::KeyPair::generate().public,
 			svk: dilithium::PublicKey::new([78u8; 2592]),
-			signature: dilithium::Signature::new([90u8; 4595]),
+			sig: dilithium::Signature::new([90u8; 4595]),
 		};
-		let cti = hpkencrypt::IlumCti::new(
-			[123u8; 704],
-			aes_gcm::Iv([45u8; 12]),
+		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
 		);
 		let commit = commit::Commit {
 			kp,
