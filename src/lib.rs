@@ -5,7 +5,6 @@ pub mod ciphertext;
 pub mod commit;
 pub mod cryptor;
 pub mod dilithium;
-pub mod ed448;
 pub mod group;
 pub mod hash;
 pub mod hkdf;
