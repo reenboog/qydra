@@ -3,7 +3,7 @@ pub mod chain;
 pub mod chain_tree;
 pub mod ciphertext;
 pub mod commit;
-pub mod cryptor;
+pub mod protocol;
 pub mod dilithium;
 pub mod group;
 pub mod hash;
