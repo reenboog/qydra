@@ -4,6 +4,7 @@ use crate::{
 	hmac, hpkencrypt,
 	id::Id,
 	key_schedule::JoinerSecret,
+	nid::Nid,
 	roster::Roster,
 };
 use sha2::{Digest, Sha256};
@@ -22,13 +23,13 @@ impl WlcmCti {
 
 #[derive(Clone)]
 pub struct WlcmCtd {
-	pub user_id: Id,
+	pub user_id: Nid,
 	pub key_id: Id,
 	pub ctd: hpkencrypt::CmpdCtd,
 }
 
 impl WlcmCtd {
-	pub fn new(user_id: Id, key_id: Id, ctd: hpkencrypt::CmpdCtd) -> Self {
+	pub fn new(user_id: Nid, key_id: Id, ctd: hpkencrypt::CmpdCtd) -> Self {
 		Self {
 			user_id,
 			key_id,
@@ -45,7 +46,7 @@ pub struct Info {
 	pub roster: Roster,
 	pub conf_trans_hash: Hash,
 	pub conf_tag: hmac::Digest,
-	pub inviter: Id,
+	pub inviter: Nid,
 	pub joiner: JoinerSecret,
 }
 
@@ -56,7 +57,7 @@ impl Info {
 		roster: Roster,
 		conf_trans_hash: Hash,
 		conf_tag: hmac::Digest,
-		inviter: Id,
+		inviter: Nid,
 		joiner: JoinerSecret,
 	) -> Self {
 		Self {
@@ -80,7 +81,7 @@ impl Hashable for Info {
 				&self.roster.hash(),
 				&self.conf_trans_hash,
 				self.conf_tag.as_bytes(),
-				self.inviter.as_bytes(),
+				self.inviter.as_bytes().as_slice(),
 				&self.joiner,
 			]
 			.concat(),

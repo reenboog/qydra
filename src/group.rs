@@ -13,6 +13,7 @@ use crate::key_schedule::{
 	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
 };
 use crate::member::Member;
+use crate::nid::Nid;
 use crate::proposal::{self, FramedProposal, Proposal, UnframedProposal};
 use crate::roster::Roster;
 use crate::serializable::{Deserializable, Serializable};
@@ -95,7 +96,7 @@ pub struct Group {
 
 	// FIXME: introduce a struct similar to Owner
 	// my id
-	user_id: Id,
+	user_id: Nid,
 	// my decryption key
 	ilum_dk: ilum::SecretKey,
 	x448_dk: x448::PrivateKey,
@@ -108,7 +109,7 @@ pub struct Group {
 // a similar structure should be used for `me` in `Group`
 #[derive(Clone)]
 pub struct Owner {
-	id: Id,
+	id: Nid,
 	kp: KeyPackage,
 	ilum_dk: ilum::SecretKey,
 	x448_dk: x448::PrivateKey,
@@ -169,7 +170,7 @@ impl Group {
 	// this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
 	pub fn propose_add(
 		&mut self,
-		id: Id,
+		id: Nid,
 		kp: KeyPackage,
 	) -> Result<(FramedProposal, Ciphertext), Error> {
 		if self.roster.contains(&id) {
@@ -181,7 +182,7 @@ impl Group {
 	}
 
 	// TODO: use a type instead of (FramedProposal, Ciphertext)
-	pub fn propose_remove(&mut self, id: &Id) -> Result<(FramedProposal, Ciphertext), Error> {
+	pub fn propose_remove(&mut self, id: &Nid) -> Result<(FramedProposal, Ciphertext), Error> {
 		if !self.roster.contains(id) {
 			Err(Error::UserDoesNotExist)
 		} else {
@@ -222,7 +223,7 @@ impl Group {
 		let to_sign = Sha256::digest(
 			[
 				self.ctx().as_slice(),
-				sender.as_bytes(),
+				sender.as_bytes().as_slice(),
 				content_id.as_bytes(),
 				&ct,
 			]
@@ -255,7 +256,7 @@ impl Group {
 			let to_sign = Sha256::digest(
 				[
 					self.ctx().as_slice(),
-					sender.id.as_bytes(),
+					sender.id.as_bytes().as_slice(),
 					ct.content_id.as_bytes(),
 					&ct.payload,
 				]
@@ -297,7 +298,7 @@ impl Group {
 		let to_sign = Sha256::digest(
 			[
 				self.ctx().as_slice(),
-				self.user_id.as_bytes(),
+				self.user_id.as_bytes().as_slice(),
 				&proposal.hash(),
 			]
 			.concat(),
@@ -326,7 +327,7 @@ impl Group {
 	fn verify_unframe_commit(
 		&self,
 		fc: &FramedCommit,
-	) -> Result<(Id, Commit, Signature, hmac::Digest), Error> {
+	) -> Result<(Nid, Commit, Signature, hmac::Digest), Error> {
 		if fc.guid != self.uid {
 			return Err(Error::WrongGroup);
 		}
@@ -340,7 +341,7 @@ impl Group {
 			let to_sign = Sha256::digest(
 				[
 					self.ctx().as_slice(),
-					fc.sender.as_bytes(),
+					fc.sender.as_bytes().as_slice(),
 					&fc.commit.hash(),
 				]
 				.concat(),
@@ -376,7 +377,12 @@ impl Group {
 			}
 
 			let to_sign = Sha256::digest(
-				[self.ctx().as_slice(), fp.sender.as_bytes(), &fp.prop.hash()].concat(), // TODO: move to a helper pack function?
+				[
+					self.ctx().as_slice(),
+					fp.sender.as_bytes().as_slice(),
+					&fp.prop.hash(),
+				]
+				.concat(), // TODO: move to a helper pack function?
 			);
 
 			if !sender.kp.svk.verify(&to_sign, &fp.sig) {
@@ -420,7 +426,7 @@ impl Group {
 	) -> Result<
 		(
 			FramedCommit,
-			Vec<(Id, Option<hpkencrypt::CmpdCtd>)>,
+			Vec<(Nid, Option<hpkencrypt::CmpdCtd>)>,
 			Option<(WlcmCti, Vec<WlcmCtd>)>,
 		),
 		Error,
@@ -501,7 +507,7 @@ impl Group {
 					},
 				)
 			})
-			.collect::<Vec<(Id, Option<hpkencrypt::CmpdCtd>)>>();
+			.collect::<Vec<(Nid, Option<hpkencrypt::CmpdCtd>)>>();
 
 		let welcomes = new.welcome(&to_welcome, &joiner_secret, &conf_tag);
 
@@ -649,7 +655,7 @@ impl Group {
 	// include the used keys as well?
 	// kp, dk & ssk should be fetched from a local storage by wd.key_id
 	pub fn join(
-		id: &Id,
+		id: &Nid,
 		kp: &KeyPackage,
 		ilum_dk: &ilum::SecretKey,
 		x448_dk: &x448::PrivateKey,
@@ -734,7 +740,7 @@ impl Group {
 		(joiner, epoch_secrets, conf_key)
 	}
 
-	fn derive_conf_trans_hash(&self, committer: &Id, commit: &Commit, sig: &Signature) -> Hash {
+	fn derive_conf_trans_hash(&self, committer: &Nid, commit: &Commit, sig: &Signature) -> Hash {
 		Sha256::digest(
 			[
 				// TODO: use ctx() instead of { uid, epoch }?
@@ -743,7 +749,7 @@ impl Group {
 				&commit.hash(),
 				sig.as_bytes(),
 				&self.interim_trans_hash,
-				committer.as_bytes(),
+				committer.as_bytes().as_slice(),
 			]
 			.concat(),
 		)
@@ -757,7 +763,7 @@ impl Group {
 		let to_sign = Sha256::digest(
 			[
 				self.ctx().as_slice(),
-				self.user_id.as_bytes(),
+				self.user_id.as_bytes().as_slice(),
 				&commit.hash(),
 			]
 			.concat(),
@@ -893,8 +899,8 @@ impl Group {
 
 // A properly ordered, validated set of proposals
 struct Diff {
-	updated: Vec<Id>,
-	removed: Vec<Id>,
+	updated: Vec<Nid>,
+	removed: Vec<Nid>,
 	added: Vec<Member>,
 }
 
@@ -922,9 +928,10 @@ impl Group {
 		hmac::verify(conf_trans_hash, &hmac::Key::from(key), tag)
 	}
 
-	fn mac_key(seed: &MacSecret, user_id: &Id, nonce: &proposal::Nonce) -> hmac::Key {
+	fn mac_key(seed: &MacSecret, user_id: &Nid, nonce: &proposal::Nonce) -> hmac::Key {
 		hmac::Key::new(
-			Sha256::digest([seed.as_slice(), user_id.as_bytes(), &nonce.0].concat()).into(),
+			Sha256::digest([seed.as_slice(), user_id.as_bytes().as_slice(), &nonce.0].concat())
+				.into(),
 		)
 	}
 
@@ -945,7 +952,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
 	use super::{Group, Owner};
-	use crate::{dilithium, id::Id, key_package::KeyPackage, x448};
+	use crate::{dilithium, id::Id, key_package::KeyPackage, nid::Nid, x448};
 
 	#[test]
 	fn test_next() {
@@ -975,7 +982,7 @@ mod tests {
 		let alice_x448_kp = x448::KeyPair::generate();
 		let alice_skp = dilithium::KeyPair::generate();
 		let alice = Owner {
-			id: Id([1u8; 32]),
+			id: Nid::new(b"aliceali", 0),
 			kp: KeyPackage::new(
 				&alice_ekp.pk,
 				&alice_x448_kp.public,
@@ -989,7 +996,7 @@ mod tests {
 
 		let mut group = Group::create(seed, alice);
 
-		let bob_user_id = Id([34u8; 32]);
+		let bob_user_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
 		let bob_user_skp = dilithium::KeyPair::generate();
@@ -1041,7 +1048,7 @@ mod tests {
 		);
 		assert_eq!(alice_group.secrets, bob_group.secrets);
 
-		let charlie_user_id = Id([56u8; 32]);
+		let charlie_user_id = Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_x448_kp = x448::KeyPair::generate();
 		let charlie_user_skp = dilithium::KeyPair::generate();

@@ -92,11 +92,14 @@ enum ContentType {
 	App = 1;
 	Propsl = 2;
 	Commt = 3;
+	// how about Welcome?
 }
 
 // TODO: also send cmpd ctds (proposals, commits, welcomes)
 
 message Ciphertext {
+	// TODO: timestamp against replay attacks?
+	// TODO: reuse guards against replay attacks?
 	required ContentType content_type = 1;
 	required bytes content_id = 2;
 	required bytes payload = 3;
@@ -108,3 +111,10 @@ message Ciphertext {
 	required bytes sig = 9;
 	required bytes mac = 10;
 }
+
+// message Message {
+	// proposal
+	// commit
+	// welcome
+	// app
+// }

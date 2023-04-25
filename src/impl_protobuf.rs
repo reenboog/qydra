@@ -1,7 +1,8 @@
 include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
 use crate::{
-	aes_gcm, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, proposal, roster,
+	aes_gcm, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, nid, proposal,
+	roster,
 	serializable::{Deserializable, Serializable},
 	welcome,
 };
@@ -15,6 +16,7 @@ pub enum Error {
 	WrongDilithiumKeySize,
 	WrongDilithiumSigSize,
 	WrongIdSize,
+	WrongNidSize,
 	BadKeyPackageFormat,
 	BadMemberFormat,
 	BadRosterFormat,
@@ -101,7 +103,7 @@ impl TryFrom<Member> for member::Member {
 
 	fn try_from(val: Member) -> Result<Self, Self::Error> {
 		Ok(Self::new(
-			id::Id(val.id.try_into().or(Err(Error::WrongIdSize))?),
+			nid::Nid::try_from(val.id).or(Err(Error::WrongNidSize))?,
 			val.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
 		))
 	}
@@ -193,7 +195,7 @@ impl TryFrom<GroupInfo> for welcome::Info {
 				.try_into()
 				.or(Err(Error::WrongConfTransHashSize))?,
 			val.conf_tag.try_into().or(Err(Error::WrongConfTagSize))?,
-			id::Id(val.inviter.try_into().or(Err(Error::WrongIdSize))?),
+			nid::Nid::try_from(val.inviter).or(Err(Error::WrongNidSize))?,
 			val.joiner.try_into().or(Err(Error::WrongJoinerSize))?,
 		))
 	}
@@ -246,13 +248,13 @@ impl TryFrom<Prop> for proposal::Proposal {
 
 		Ok(match val.variant.ok_or(Error::BadProposalFormat)? {
 			Variant::Remove(r) => Remove {
-				id: id::Id(r.id.try_into().or(Err(Error::WrongIdSize))?),
+				id: nid::Nid::try_from(r.id).or(Err(Error::WrongIdSize))?,
 			},
 			Variant::Update(u) => Update {
 				kp: u.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
 			},
 			Variant::Add(a) => Add {
-				id: id::Id(a.id.try_into().or(Err(Error::WrongIdSize))?),
+				id: nid::Nid::try_from(a.id).or(Err(Error::WrongIdSize))?,
 				kp: a.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
 			},
 		})
@@ -297,7 +299,7 @@ impl TryFrom<FramedProposal> for proposal::FramedProposal {
 		Ok(Self::new(
 			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
 			val.epoch,
-			id::Id(val.sender.try_into().or(Err(Error::WrongIdSize))?),
+			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.prop.try_into().or(Err(Error::BadProposalFormat))?,
 			dilithium::Signature::new(val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?),
 			val.mac.try_into().or(Err(Error::WrongMacSize))?,
@@ -434,7 +436,7 @@ impl TryFrom<FramedCommit> for commit::FramedCommit {
 		Ok(Self::new(
 			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
 			val.epoch,
-			id::Id(val.sender.try_into().or(Err(Error::WrongIdSize))?),
+			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.commit.try_into().or(Err(Error::BadCommitFormat))?,
 			dilithium::Signature::new(val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?),
 			val.conf_tag.try_into().or(Err(Error::WrongMacSize))?,
@@ -529,7 +531,7 @@ impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
 			guid: val.guid.try_into().or(Err(Error::WrongGuidSize))?,
 			epoch: val.epoch,
 			gen: val.gen,
-			sender: id::Id(val.sender.try_into().or(Err(Error::WrongIdSize))?),
+			sender: nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			iv: aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
 			sig: dilithium::Signature::new(
 				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
@@ -553,7 +555,7 @@ impl Deserializable for ciphertext::Ciphertext {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
+		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member, nid,
 		proposal, roster,
 		serializable::{Deserializable, Serializable},
 		x448,
@@ -581,7 +583,7 @@ mod tests {
 		let s_kp = dilithium::KeyPair::generate();
 		let pack =
 			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
-		let member = member::Member::new(id::Id([42u8; 32]), pack);
+		let member = member::Member::new(nid::Nid::new(b"abcdefgh", 0), pack);
 		let serialized = member.serialize();
 		let deserialized = member::Member::deserialize(&serialized);
 
@@ -593,7 +595,7 @@ mod tests {
 		let mut r = roster::Roster::new();
 
 		_ = r.add(member::Member::new(
-			id::Id([12u8; 32]),
+			nid::Nid::new(b"abcdefgh", 0),
 			key_package::KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
@@ -603,7 +605,7 @@ mod tests {
 		));
 
 		_ = r.add(member::Member::new(
-			id::Id([34u8; 32]),
+			nid::Nid::new(b"ijklmnop", 0),
 			key_package::KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
@@ -613,7 +615,7 @@ mod tests {
 		));
 
 		_ = r.add(member::Member::new(
-			id::Id([56u8; 32]),
+			nid::Nid::new(b"qrstuvwx", 0),
 			key_package::KeyPackage {
 				ilum_ek: [78u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
@@ -640,7 +642,7 @@ mod tests {
 		};
 
 		let prop = Proposal::Remove {
-			id: id::Id([12u8; 32]),
+			id: nid::Nid::new(b"abcdefgh", 0),
 		};
 		let serialized = prop.serialize();
 		let deserialized = Proposal::deserialize(&serialized);
@@ -654,7 +656,7 @@ mod tests {
 		assert_eq!(Ok(prop), deserialized);
 
 		let prop = Proposal::Add {
-			id: id::Id([45u8; 32]),
+			id: nid::Nid::new(b"ijklmnop", 0),
 			kp: kp,
 		};
 		let serialized = prop.serialize();
@@ -674,13 +676,13 @@ mod tests {
 			sig: dilithium::Signature::new([90u8; 4595]),
 		};
 		let prop = Proposal::Add {
-			id: id::Id([15u8; 32]),
+			id: nid::Nid::new(b"abcdefgh", 0),
 			kp,
 		};
 		let fc = proposal::FramedProposal::new(
 			[123u8; 32],
 			17u64,
-			id::Id([45u8; 32]),
+			nid::Nid::new(b"ijklmnop", 0),
 			prop,
 			dilithium::Signature::new([42u8; 4595]),
 			hmac::Digest([33u8; 32]),
@@ -755,7 +757,7 @@ mod tests {
 		let fc = commit::FramedCommit::new(
 			[88u8; 32],
 			42,
-			id::Id([33u8; 32]),
+			nid::Nid::new(b"abcdefgh", 0),
 			commit,
 			dilithium::Signature::new([77u8; 4595]),
 			hmac::Digest([22u8; 32]),
@@ -775,7 +777,7 @@ mod tests {
 			guid: [34u8; 32],
 			epoch: 77,
 			gen: 1984,
-			sender: id::Id([56u8; 32]),
+			sender: nid::Nid::new(b"abcdefgh", 0),
 			iv: aes_gcm::Iv([78u8; 12]),
 			sig: dilithium::Signature::new([90u8; 4595]),
 			mac: hmac::Digest([11u8; 32]),

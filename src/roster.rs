@@ -2,16 +2,16 @@ use std::collections::BTreeMap;
 
 use crate::{
 	hash::{Hash, Hashable},
-	id::Id,
 	key_package::KeyPackage,
 	member::Member,
+	nid::Nid,
 };
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Roster {
 	// order is important, hence BTreeMap instead of HashMap
 	// TODO: make private
-	pub(crate) members: BTreeMap<Id, Member>,
+	pub(crate) members: BTreeMap<Nid, Member>,
 }
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl Roster {
 	}
 
 	// returns idx of a member with id = id
-	pub fn idx(&self, id: Id) -> Result<u32, Error> {
+	pub fn idx(&self, id: Nid) -> Result<u32, Error> {
 		Ok(self
 			.ids()
 			.iter()
@@ -48,27 +48,27 @@ impl Roster {
 			.map_or(Ok(()), |_| Err(Error::AlreadyExists))
 	}
 
-	pub fn remove(&mut self, id: &Id) -> Result<(), Error> {
+	pub fn remove(&mut self, id: &Nid) -> Result<(), Error> {
 		self.members
 			.remove(id)
 			.map_or(Err(Error::DoesNotExist), |_| Ok(()))
 	}
 
-	pub fn contains(&self, id: &Id) -> bool {
+	pub fn contains(&self, id: &Nid) -> bool {
 		self.members.contains_key(id)
 	}
 
-	pub fn get(&self, id: &Id) -> Option<&Member> {
+	pub fn get(&self, id: &Nid) -> Option<&Member> {
 		self.members.get(id)
 	}
 
 	// sets kp for id and returns prev_kp, if any, or nil
-	pub fn set(&mut self, id: &Id, kp: &KeyPackage) -> Option<Member> {
+	pub fn set(&mut self, id: &Nid, kp: &KeyPackage) -> Option<Member> {
 		self.members
 			.insert(id.clone(), Member::new(id.clone(), kp.clone()))
 	}
 
-	pub fn ids(&self) -> Vec<Id> {
+	pub fn ids(&self) -> Vec<Nid> {
 		self.members.keys().map(|k| *k).collect()
 	}
 
@@ -107,16 +107,16 @@ mod tests {
 	use crate::{
 		dilithium::{PublicKey, Signature},
 		hash::Hashable,
-		id::Id,
 		key_package::KeyPackage,
 		member::Member,
+		nid::Nid,
 		x448,
 	};
 
 	#[test]
 	fn test_from_member() {
 		let r = Roster::from(Member::new(
-			Id([12u8; 32]),
+			Nid::new(b"abcdefgh", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -125,8 +125,8 @@ mod tests {
 			},
 		));
 
-		assert!(r.contains(&Id([12u8; 32])));
-		assert!(!r.contains(&Id([34u8; 32])));
+		assert!(r.contains(&Nid::new(b"abcdefgh", 0)));
+		assert!(!r.contains(&Nid::new(b"ijklmnop", 1)));
 	}
 
 	#[test]
@@ -135,7 +135,7 @@ mod tests {
 
 		assert!(roster
 			.add(Member::new(
-				Id([12u8; 32]),
+				Nid::new(b"abcdefgh", 0),
 				KeyPackage {
 					ilum_ek: [34u8; 768],
 					x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -147,7 +147,7 @@ mod tests {
 
 		assert!(roster
 			.add(Member::new(
-				Id([12u8; 32]),
+				Nid::new(b"abcdefgh", 0),
 				KeyPackage {
 					ilum_ek: [56u8; 768],
 					x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -161,7 +161,7 @@ mod tests {
 	#[test]
 	fn test_remove() {
 		let mut roster = Roster::from(Member::new(
-			Id([12u8; 32]),
+			Nid::new(b"abcdefgh", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -171,7 +171,7 @@ mod tests {
 		));
 
 		_ = roster.add(Member::new(
-			Id([99u8; 32]),
+			Nid::new(b"ijklmnop", 0),
 			KeyPackage {
 				ilum_ek: [22u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -180,11 +180,11 @@ mod tests {
 			},
 		));
 
-		assert!(roster.remove(&Id([12u8; 32])).is_ok());
-		assert!(roster.remove(&Id([12u8; 32])).is_err());
-		assert!(roster.remove(&Id([0u8; 32])).is_err());
-		assert!(roster.remove(&Id([99u8; 32])).is_ok());
-		assert!(roster.remove(&Id([99u8; 32])).is_err());
+		assert!(roster.remove(&Nid::new(b"abcdefgh", 0)).is_ok());
+		assert!(roster.remove(&Nid::new(b"abcdefgh", 0)).is_err());
+		assert!(roster.remove(&Nid::new(b"jjjjjjjj", 22)).is_err());
+		assert!(roster.remove(&Nid::new(b"ijklmnop", 0)).is_ok());
+		assert!(roster.remove(&Nid::new(b"ijklmnop", 0)).is_err());
 	}
 
 	#[test]
@@ -201,10 +201,10 @@ mod tests {
 	fn test_contains() {
 		let mut roster = Roster::new();
 
-		assert!(!roster.contains(&Id([12u8; 32])));
+		assert!(!roster.contains(&Nid::new(b"abcdefgh", 0)));
 
 		_ = roster.add(Member::new(
-			Id([12u8; 32]),
+			Nid::new(b"abcdefgh", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -213,11 +213,11 @@ mod tests {
 			},
 		));
 
-		assert!(roster.contains(&Id([12u8; 32])));
-		assert!(!roster.contains(&Id([34u8; 32])));
+		assert!(roster.contains(&Nid::new(b"abcdefgh", 0)));
+		assert!(!roster.contains(&Nid::new(b"kkkkkkkk", 0)));
 
 		_ = roster.add(Member::new(
-			Id([34u8; 32]),
+			Nid::new(b"abcdwxyz", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -226,8 +226,8 @@ mod tests {
 			},
 		));
 
-		assert!(roster.contains(&Id([34u8; 32])));
-		assert!(!roster.contains(&Id([45u8; 32])));
+		assert!(roster.contains(&Nid::new(b"abcdwxyz", 0)));
+		assert!(!roster.contains(&Nid::new(b"tttttttt", 10)));
 	}
 
 	#[test]
@@ -236,7 +236,7 @@ mod tests {
 
 		// add two elements with keys 12 and 34 to r1
 		_ = r1.add(Member::new(
-			Id([12u8; 32]),
+			Nid::new(b"abcdefgh", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -246,7 +246,7 @@ mod tests {
 		));
 
 		_ = r1.add(Member::new(
-			Id([34u8; 32]),
+			Nid::new(b"abcdwxyz", 0),
 			KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -259,7 +259,7 @@ mod tests {
 
 		// add two elements with keys 23 and 12 to r2
 		_ = r2.add(Member::new(
-			Id([34u8; 32]),
+			Nid::new(b"abcdwxyz", 0),
 			KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
@@ -269,7 +269,7 @@ mod tests {
 		));
 
 		_ = r2.add(Member::new(
-			Id([12u8; 32]),
+			Nid::new(b"abcdefgh", 0),
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),

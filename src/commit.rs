@@ -5,6 +5,7 @@ use crate::{
 	hmac, hpkencrypt,
 	id::{Id, Identifiable},
 	key_package::KeyPackage,
+	nid::Nid,
 };
 use sha2::{Digest, Sha256};
 
@@ -50,7 +51,7 @@ impl Hashable for Commit {
 pub struct FramedCommit {
 	pub guid: Hash,
 	pub epoch: u64,
-	pub sender: Id,
+	pub sender: Nid,
 	pub commit: Commit,
 	pub sig: Signature, // do I need this? I could verify the encrypted content instead
 	// TODO: how about mac?
@@ -61,7 +62,7 @@ impl FramedCommit {
 	pub fn new(
 		guid: Hash,
 		epoch: u64,
-		sender: Id,
+		sender: Nid,
 		commit: Commit,
 		sig: Signature,
 		conf_tag: hmac::Digest,
@@ -83,7 +84,7 @@ impl Identifiable for FramedCommit {
 			[
 				self.guid.as_slice(),
 				&self.epoch.to_be_bytes(),
-				self.sender.as_bytes(),
+				self.sender.as_bytes().as_slice(),
 				&self.commit.hash(),
 				self.sig.as_bytes(),
 				self.conf_tag.as_bytes(),

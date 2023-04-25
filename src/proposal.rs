@@ -4,13 +4,14 @@ use crate::{
 	hmac::Digest,
 	id::{Id, Identifiable},
 	key_package::KeyPackage,
+	nid::Nid,
 };
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Proposal {
-	Remove { id: Id },
+	Remove { id: Nid },
 	Update { kp: KeyPackage },
-	Add { id: Id, kp: KeyPackage },
+	Add { id: Nid, kp: KeyPackage },
 }
 
 // Recovery: No need for a proposal, because the assumption is that group members no longer share the same state.
@@ -71,7 +72,7 @@ pub struct Nonce(pub [u8; 4]);
 pub struct FramedProposal {
 	pub guid: Hash,
 	pub epoch: u64,
-	pub sender: Id,
+	pub sender: Nid,
 	pub prop: Proposal,
 	pub sig: Signature, // signed with ssk (not updated upon rekey currently); do I need this as well? I could verify the encrypted content instead
 	pub mac: Digest,    // do I need this? I'll be encrypting this prop anyway
@@ -81,7 +82,7 @@ pub struct FramedProposal {
 // a validated by a group proposal
 pub struct UnframedProposal {
 	pub id: Id,
-	pub sender: Id,
+	pub sender: Nid,
 	pub prop: Proposal,
 }
 
@@ -89,7 +90,7 @@ impl FramedProposal {
 	pub fn new(
 		guid: Hash,
 		epoch: u64,
-		sender: Id,
+		sender: Nid,
 		prop: Proposal,
 		sig: Signature,
 		mac: Digest,
@@ -115,7 +116,7 @@ impl Identifiable for FramedProposal {
 			[
 				&self.guid,
 				self.epoch.to_be_bytes().as_slice(),
-				self.sender.as_bytes(),
+				self.sender.as_bytes().as_slice(),
 				&self.prop.hash(),
 				self.sig.as_bytes(),
 				self.mac.as_bytes(),

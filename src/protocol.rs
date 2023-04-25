@@ -40,6 +40,8 @@
 
 */
 
+use std::sync::Arc;
+
 use crate::{
 	commit::FramedCommit,
 	hash::Hash,
@@ -47,6 +49,40 @@ use crate::{
 	proposal::FramedProposal,
 	welcome::{WlcmCtd, WlcmCti},
 };
+
+// a randomly generated public seed that is to be used for all instances of this protocol in order for mPKE to work
+const ILUM_SEED: &[u8; 16] = b"\x96\x48\xb8\x08\x8b\x16\x1c\xf1\x22\xee\xb4\x5a\x29\x69\x02\x43";
+
+// pub struct Owner {
+// 	id: Id,
+// 	kp: KeyPackage,
+// 	ilum_dk: ilum::SecretKey,
+// 	x448_dk: x448::PrivateKey,
+// 	ssk: dilithium::PrivateKey,
+// }
+
+pub trait Storage {
+	//
+}
+
+pub trait Api {
+	//
+}
+
+pub struct Protocol<S, A> {
+	storage: Arc<S>,
+	api: Arc<A>,
+}
+
+impl<S, A> Protocol<S, A>
+where
+	S: Storage,
+	A: Api,
+{
+	pub fn create_group() {
+		// TODO: serialize
+	}
+}
 
 // enum Message {
 // 	App(Vec<u8>),
@@ -73,3 +109,11 @@ use crate::{
 
 // todo!()
 // }
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn test_create_group() {
+		//
+	}
+}

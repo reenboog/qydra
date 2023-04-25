@@ -1,4 +1,4 @@
-use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id};
+use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id, nid::Nid};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -20,7 +20,7 @@ pub struct Ciphertext {
 	pub guid: Hash,
 	pub epoch: u64,
 	pub gen: u32,
-	pub sender: Id,
+	pub sender: Nid,
 	pub iv: aes_gcm::Iv,
 	pub sig: dilithium::Signature,
 	pub mac: hmac::Digest,
