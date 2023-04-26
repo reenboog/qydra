@@ -44,8 +44,11 @@ use std::sync::Arc;
 
 use crate::{
 	commit::FramedCommit,
+	group::{Group, Owner},
 	hash::Hash,
 	id::Id,
+	key_package::KeyPackage,
+	nid::Nid,
 	proposal::FramedProposal,
 	welcome::{WlcmCtd, WlcmCti},
 };
@@ -65,10 +68,12 @@ pub trait Storage {
 	//
 }
 
+// TODO: make async
 pub trait Api {
-	//
+	fn fetch_key_packages(&self, nid: &[Nid]) -> Vec<KeyPackage>;
 }
 
+// TODO: make async
 pub struct Protocol<S, A> {
 	storage: Arc<S>,
 	api: Arc<A>,
@@ -79,8 +84,16 @@ where
 	S: Storage,
 	A: Api,
 {
-	pub fn create_group() {
-		// TODO: serialize
+	pub fn create_group(&self, owner: Owner, invitees: &[Nid]) {
+		let kps = self.api.fetch_key_packages(invitees);
+		let group = Group::create(ILUM_SEED.to_owned(), owner);
+		// let props = kps.iter().map(|nid| group.propose_add(kp.ni, kp).collect();
+		// fetch prekeys
+		// create group
+		// commit
+		// apply commit
+		// save group
+		// send welcomes
 	}
 }
 

@@ -71,6 +71,8 @@ pub enum Error {
 	BadAesMaterial,
 	// failed to deserialize content
 	BadContentFormat,
+	// no ctd was supplied, but the receiver is not being removed
+	NoCdtSupplied,
 }
 
 // TODO: include Config?
@@ -191,9 +193,9 @@ impl Group {
 	}
 
 	pub fn propose_update(&mut self) -> (FramedProposal, Ciphertext) {
-		let (kp, ilum_sk, x448_sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk, dilithium_sk) = self.gen_kp();
 		let (fp, ct) = self.frame_proposal(Proposal::Update { kp });
-		let pu = PendingUpdate::new(ilum_sk, x448_sk, self.ssk.clone()); // TODO: make update ssk as well
+		let pu = PendingUpdate::new(ilum_sk, x448_sk, dilithium_sk);
 
 		self.pending_updates.insert(fp.id(), pu);
 
@@ -406,18 +408,25 @@ impl Group {
 		}
 	}
 
-	fn gen_kp(&self) -> (KeyPackage, ilum::SecretKey, x448::PrivateKey) {
-		// TODO: update signing key as well
+	fn gen_kp(
+		&self,
+	) -> (
+		KeyPackage,
+		ilum::SecretKey,
+		x448::PrivateKey,
+		dilithium::PrivateKey,
+	) {
 		let ilum_kp = ilum::gen_keypair(&self.seed);
 		let x448_kp = x448::KeyPair::generate();
+		let dilithium_kp = dilithium::KeyPair::generate();
 		let package = KeyPackage::new(
 			&ilum_kp.pk,
 			&x448_kp.public,
-			&self.roster.get(&self.user_id).unwrap().kp.svk, // TODO: do not hard unwrap; derive pk from sk instead? (dilithium crate needs to be changed then)
-			&self.ssk,
+			&dilithium_kp.public,
+			&dilithium_kp.private,
 		);
 
-		(package, ilum_kp.sk, x448_kp.private)
+		(package, ilum_kp.sk, x448_kp.private, dilithium_kp.private)
 	}
 
 	pub fn commit(
@@ -462,7 +471,7 @@ impl Group {
 			.ids()
 			.into_iter()
 			.filter(|id| !to_welcome.iter().find(|m| m.id == *id).is_some())
-			.map(|id| new.roster.get(&id).unwrap().clone())
+			.map(|id| self.roster.get(&id).unwrap().clone())
 			.collect::<Vec<Member>>();
 
 		let (com_secret, com_kp, encryption) = new.rekey(&to_notify);
@@ -529,7 +538,7 @@ impl Group {
 	pub fn process(
 		&self,
 		fc: &FramedCommit,
-		ctd: &hpkencrypt::CmpdCtd,
+		ctd: Option<&hpkencrypt::CmpdCtd>,
 		fps: &[FramedProposal],
 	) -> Result<Option<Group>, Error> {
 		// verify group, epoch, membership and the signature first
@@ -571,47 +580,50 @@ impl Group {
 				return Err(Error::CommitsByEvicteeNotAllowed);
 			}
 
-			// TODO: my ctd should be nil, if I get here;
-			if diff.removed.contains(&self.user_id) {
-				// I was removed; clear my state and leave
-				return Ok(None);
-			}
+			if let Some(ctd) = ctd {
+				new.conf_trans_hash = self.derive_conf_trans_hash(&sender, &commit, &sig);
 
-			new.conf_trans_hash = self.derive_conf_trans_hash(&sender, &commit, &sig);
-
-			let ilum_ek = self.roster.get(&self.user_id).unwrap().kp.ilum_ek;
-			let com_secret = CommitSecret::try_from(
-				hpkencrypt::decrypt(
-					&commit.cti,
-					ctd,
-					&self.seed,
-					&ilum_ek,
-					&self.ilum_dk,
-					&self.x448_dk,
+				let ilum_ek = self.roster.get(&self.user_id).unwrap().kp.ilum_ek;
+				let com_secret = CommitSecret::try_from(
+					hpkencrypt::decrypt(
+						&commit.cti,
+						ctd,
+						&self.seed,
+						&ilum_ek,
+						&self.ilum_dk,
+						&self.x448_dk,
+					)
+					.or(Err(Error::HpkeDecryptFailed))?,
 				)
-				.or(Err(Error::HpkeDecryptFailed))?,
-			)
-			.or(Err(Error::WrongComSecretSize))?;
+				.or(Err(Error::WrongComSecretSize))?;
 
-			// REVIEW: this verifies the new ilum keypair, but assumes signing keys are static for now;
-			// otherwise, committers would need to sign their new signing keys with their current epoch's signing keys
-			if !commit.kp.verify() {
-				return Err(Error::InvalidKeyPair);
+				// REVIEW: this verifies the new ilum keypair, but assumes signing keys are static for now;
+				// otherwise, committers would need to sign their new signing keys with their current epoch's signing keys
+				if !commit.kp.verify() {
+					return Err(Error::InvalidKeyPair);
+				}
+
+				new.roster.set(&sender, &commit.kp);
+
+				let (_, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
+
+				if !Self::verify_conf_tag(&conf_key, &new.conf_trans_hash, &conf_tag) {
+					return Err(Error::InvalidConfTag);
+				}
+
+				new.secrets = epoch_secrets;
+				new.interim_trans_hash =
+					Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
+
+				return Ok(Some(new));
+			} else {
+				if diff.removed.contains(&self.user_id) {
+					// I was removed; clear my state and leave
+					return Ok(None);
+				} else {
+					return Err(Error::NoCdtSupplied);
+				}
 			}
-
-			new.roster.set(&sender, &commit.kp);
-
-			let (_, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
-
-			if !Self::verify_conf_tag(&conf_key, &new.conf_trans_hash, &conf_tag) {
-				return Err(Error::InvalidConfTag);
-			}
-
-			new.secrets = epoch_secrets;
-			new.interim_trans_hash =
-				Self::interim_trans_hash(&new.conf_trans_hash, conf_tag.as_bytes());
-
-			return Ok(Some(new));
 		}
 	}
 
@@ -791,12 +803,13 @@ impl Group {
 	// TODO: return (com, kp, enc) and apply instead of state change?
 	fn rekey(&mut self, receivers: &[Member]) -> (CommitSecret, KeyPackage, hpkencrypt::Encrypted) {
 		let com_secret = rand::thread_rng().gen::<CommitSecret>();
-		let (kp, ilum_sk, x448_sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk, dilithium_sk) = self.gen_kp();
 
-		// TODO: update ssk/svk as well; should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
+		// should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
 		_ = self.roster.set(&self.user_id, &kp);
 		self.ilum_dk = ilum_sk;
 		self.x448_dk = x448_sk;
+		self.ssk = dilithium_sk;
 
 		let keys = receivers
 			.iter()
@@ -952,7 +965,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
 	use super::{Group, Owner};
-	use crate::{dilithium, id::Id, key_package::KeyPackage, nid::Nid, x448};
+	use crate::{dilithium, key_package::KeyPackage, nid::Nid, x448};
 
 	#[test]
 	fn test_next() {
@@ -981,8 +994,9 @@ mod tests {
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
 		let alice_skp = dilithium::KeyPair::generate();
+		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
-			id: Nid::new(b"aliceali", 0),
+			id: alice_id.clone(),
 			kp: KeyPackage::new(
 				&alice_ekp.pk,
 				&alice_x448_kp.public,
@@ -1007,15 +1021,16 @@ mod tests {
 			&bob_user_skp.private,
 		);
 		let (add_bob_prop, _) = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		let (update_alice_prop, _) = group.propose_update();
 		// alice invite using her initial group
-		let (fc, ctds, wlcms) = group.commit(&[add_bob_prop.clone()]).unwrap();
+		let (fc, ctds, wlcms) = group.commit(&[add_bob_prop.clone(), update_alice_prop.clone()]).unwrap();
 
 		// and get alice_group
-		let alice_group = group
+		let mut alice_group = group
 			.process(
 				&fc,
-				&ctds.get(0).unwrap().1.clone().unwrap(),
-				&[add_bob_prop],
+				ctds.get(0).unwrap().1.as_ref(),
+				&[add_bob_prop, update_alice_prop],
 			)
 			.unwrap()
 			.unwrap();
@@ -1062,29 +1077,31 @@ mod tests {
 		let (add_charlie_prop, _) = bob_group
 			.propose_add(charlie_user_id, charlie_user_kp.clone())
 			.unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		let (update_bob_prop, _) = bob_group.propose_update();
 		// commits using his bob_group
-		let (fc, ctds, wlcms) = bob_group.commit(&[add_charlie_prop.clone()]).unwrap();
+		let (fc, ctds, wlcms) = bob_group.commit(&[add_charlie_prop.clone(), update_alice_prop.clone(), update_bob_prop.clone()]).unwrap();
 
 		// alices processes
-		let alice_group = alice_group
+		let mut alice_group = alice_group
 			.process(
 				&fc,
-				&ctds.get(0).unwrap().1.clone().unwrap(),
-				&[add_charlie_prop.clone()],
+				ctds.get(0).unwrap().1.as_ref(),
+				&[add_charlie_prop.clone(), update_alice_prop.clone(), update_bob_prop.clone()],
 			)
 			.unwrap()
 			.unwrap();
 		// bob processes
-		let bob_group = bob_group
+		let mut bob_group = bob_group
 			.process(
 				&fc,
-				&ctds.get(1).unwrap().1.clone().unwrap(),
-				&[add_charlie_prop],
+				ctds.get(1).unwrap().1.as_ref(),
+				&[update_bob_prop, add_charlie_prop, update_alice_prop],
 			)
 			.unwrap()
 			.unwrap();
 		// charlie joins
-		let charlie_group = Group::join(
+		let mut charlie_group = Group::join(
 			&charlie_user_id,
 			&charlie_user_kp,
 			&charlie_user_ekp.sk,
@@ -1128,11 +1145,64 @@ mod tests {
 			bob_group.pending_updates.len()
 		);
 		assert_eq!(charlie_group.secrets, bob_group.secrets);
+
+		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
+		let (update_charlie_prop, _) = charlie_group.propose_update();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		let (fc, ctds, wlcms) = bob_group.commit(&[remove_alice_prop.clone(), update_charlie_prop.clone(), update_alice_prop.clone()]).unwrap();
+		let alice_group = alice_group
+			.process(
+				&fc,
+				ctds.get(0).unwrap().1.as_ref(),
+				&[remove_alice_prop.clone(), update_alice_prop.clone(), update_charlie_prop.clone()],
+			)
+			.unwrap();
+
+		assert!(alice_group.is_none());
+		assert!(wlcms.is_none());
+
+		let bob_group = bob_group
+			.process(
+				&fc,
+				ctds.get(1).unwrap().1.as_ref(),
+				&[remove_alice_prop.clone(), update_alice_prop.clone(), update_charlie_prop.clone()],
+			)
+			.unwrap()
+			.unwrap();
+
+		let charlie_group = charlie_group
+			.process(
+				&fc,
+				ctds.get(2).unwrap().1.as_ref(),
+				&[remove_alice_prop.clone(), update_alice_prop, update_charlie_prop.clone()],
+			)
+			.unwrap()
+			.unwrap();
+
+		assert_eq!(charlie_group.uid, bob_group.uid);
+		assert_eq!(charlie_group.epoch, bob_group.epoch);
+		assert_eq!(charlie_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(
+			charlie_group.interim_trans_hash,
+			bob_group.interim_trans_hash
+		);
+		assert_eq!(charlie_group.roster, bob_group.roster);
+		assert_eq!(
+			charlie_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			charlie_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
+		assert_eq!(charlie_group.secrets, bob_group.secrets);
+		assert!(!charlie_group.roster.contains(&alice_id));
 	}
 
 	#[test]
 	fn test_rekey() {
 		// TODO: implement
+		// ensure ssk is updated as well
 	}
 
 	#[test]

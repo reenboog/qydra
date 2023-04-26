@@ -12,7 +12,6 @@ use crate::{
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct KeyPackage {
-	// TODO: do I need to pack this with the owner's id as well?
 	pub ilum_ek: ilum::PublicKey,
 	pub x448_ek: x448::PublicKey,
 	pub svk: dilithium::PublicKey,
@@ -41,7 +40,6 @@ impl KeyPackage {
 	}
 }
 
-// TODO: add id as well?
 pub fn sign(
 	ilum_ek: &ilum::PublicKey,
 	x448_ek: &x448::PublicKey,
@@ -53,7 +51,6 @@ pub fn sign(
 	ssk.sign(&bytes)
 }
 
-// TODO: add id as well
 pub fn verify(
 	ilum_ek: &ilum::PublicKey,
 	x448_ek: &x448::PublicKey,
@@ -75,7 +72,6 @@ fn pack(
 
 impl Hashable for KeyPackage {
 	fn hash(&self) -> crate::hash::Hash {
-		// TODO: do I need user_id here?
 		Sha256::digest(
 			[
 				self.ilum_ek.as_slice(),

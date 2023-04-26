@@ -26,6 +26,8 @@ impl Nid {
 impl TryFrom<Vec<u8>> for Nid {
 	type Error = std::array::TryFromSliceError;
 
+	// FIXME: not the same as instantiating from a string for `:` is not included
+
 	fn try_from(val: Vec<u8>) -> Result<Self, Self::Error> {
 		let slice: [u8; 9] = val.as_slice().try_into()?;
 
