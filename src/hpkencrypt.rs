@@ -219,6 +219,7 @@ pub fn ecc_encrypt(pt: &[u8], keys: &[x448::PublicKey]) -> EccEncrypted {
 	let inner_aes = aes_gcm::Aes::new();
 	// encrypt pt with the generated aes
 	let ct = inner_aes.encrypt(pt);
+
 	// TODO: this does not authenticate me, does it? Should I sign the ephemeral key (and iv)?
 	let eph_kp = x448::KeyPair::generate();
 	// encrypt the used aes to each specified public key

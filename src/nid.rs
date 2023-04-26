@@ -1,6 +1,5 @@
 pub type Cid = [u8; 8];
 
-// TODO: replace with a String-based implementation?
 // basically, 9 bytes is enough to encode cid + device_id (u8 for device_id which gives 255 devices)
 // do I actually need all this here? the protocol is not concerned with cids at all – just nids
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]

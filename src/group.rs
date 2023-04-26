@@ -15,6 +15,7 @@ use crate::key_schedule::{
 use crate::member::Member;
 use crate::nid::Nid;
 use crate::proposal::{self, FramedProposal, Proposal, UnframedProposal};
+use crate::reuse_guard::ReuseGuard;
 use crate::roster::Roster;
 use crate::serializable::{Deserializable, Serializable};
 use crate::treemath::LeafIndex;
@@ -24,7 +25,7 @@ use crate::x448;
 use crate::{aes_gcm, dilithium, hkdf, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
 	WrongGroup,
 	WrongEpoch,
@@ -75,12 +76,10 @@ pub enum Error {
 	NoCdtSupplied,
 }
 
-// TODO: include Config?
-
 // group state
 #[derive(Clone)]
 pub struct Group {
-	uid: Hash, // TODO: introduce a type?
+	uid: Hash, // TODO: introduce a type? use id instead?
 	epoch: u64,
 
 	// WARNING: seed should be public and shared among all participating keys; mPKE won't work otherwise
@@ -91,7 +90,6 @@ pub struct Group {
 
 	roster: Roster,
 
-	// TODO: HashMap<Id, vert_svks>?
 	// TODO: move to a higher level entity
 	pending_updates: HashMap<Id, PendingUpdate>,
 	pending_commits: HashMap<Id, PendingCommit>, // keyed by FramedCommit.id
@@ -169,15 +167,15 @@ impl Group {
 		Self::derive_ctx(&self.uid, self.epoch, &self.roster, &self.conf_trans_hash)
 	}
 
-	// this KeyPackage should be verified by a higher layer while here, we're making a TOFU assumption
 	pub fn propose_add(
 		&mut self,
 		id: Nid,
 		kp: KeyPackage,
 	) -> Result<(FramedProposal, Ciphertext), Error> {
 		if self.roster.contains(&id) {
-			// TODO: should we verify kp here as well?
 			Err(Error::UserAlreadyExists)
+		} else if !kp.verify() {
+			Err(Error::InvalidKeyPair)
 		} else {
 			Ok(self.frame_proposal(Proposal::Add { id, kp }))
 		}
@@ -213,10 +211,10 @@ impl Group {
 		let chain_tree = self.secrets.chain_tree_for_message_type(content_type);
 		// TODO: get_next can not fail here, but Result could be used as well
 		let (key, gen) = chain_tree.get_next(LeafIndex(leaf)).unwrap();
-		let material = hkdf::Hkdf::from_ikm(&key.0)
+		let reuse_grd = ReuseGuard::new();
+		// a random reuse guard is applied to the current encryption key
+		let material = hkdf::Hkdf::from_ikm(&reuse_grd.apply_to(&key.0))
 			.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
-
-		// FIXME: introduce reuse guards
 
 		let enc_key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
 		let mac_key = hmac::Key::from(&material[aes_gcm::Key::SIZE..].try_into().unwrap());
@@ -246,6 +244,7 @@ impl Group {
 			iv: aes.iv,
 			mac,
 			sig,
+			reuse_grd,
 		}
 	}
 
@@ -269,14 +268,13 @@ impl Group {
 				return Err(Error::InvalidSignature);
 			}
 
-			// FIXME: introduce reuse guards
-
 			let chain_tree = self.secrets.chain_tree_for_message_type(ct.content_type);
 			let key = chain_tree
 				.get(LeafIndex(leaf), ct.gen)
 				.or(Err(Error::FailedToDeriveChainTreeKey))?;
-			let material = hkdf::Hkdf::from_ikm(&key.0)
+			let material = hkdf::Hkdf::from_ikm(&ct.reuse_grd.apply_to(&key.0))
 				.expand_no_info::<{ aes_gcm::Key::SIZE + hmac::Key::SIZE }>();
+
 			let enc_key = aes_gcm::Key(material[..aes_gcm::Key::SIZE].try_into().unwrap());
 			let mac_key = hmac::Key::from(&material[aes_gcm::Key::SIZE..].try_into().unwrap());
 			let to_mac = Sha256::digest([to_sign.as_slice(), ct.sig.as_bytes()].concat());
@@ -309,7 +307,7 @@ impl Group {
 		let sig = self.ssk.sign(&to_sign);
 		let to_mac = Sha256::digest([to_sign.as_slice(), sig.as_bytes()].concat());
 		let mac_nonce = proposal::Nonce(rand::thread_rng().gen());
-		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce); // TODO: do I need to use a SecretsTree instead? - rather yes
+		let mac_key = Self::mac_key(&self.secrets.mac, &self.user_id, &mac_nonce);
 		let mac = hmac::digest(&mac_key, &to_mac);
 
 		let fp = FramedProposal::new(
@@ -964,8 +962,8 @@ impl Group {
 
 #[cfg(test)]
 mod tests {
-	use super::{Group, Owner};
-	use crate::{dilithium, key_package::KeyPackage, nid::Nid, x448};
+	use super::{Group, Owner, Error};
+	use crate::{dilithium, key_package::KeyPackage, nid::Nid, x448, proposal::FramedProposal};
 
 	#[test]
 	fn test_next() {
@@ -1023,7 +1021,9 @@ mod tests {
 		let (add_bob_prop, _) = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
 		let (update_alice_prop, _) = group.propose_update();
 		// alice invite using her initial group
-		let (fc, ctds, wlcms) = group.commit(&[add_bob_prop.clone(), update_alice_prop.clone()]).unwrap();
+		let (fc, ctds, wlcms) = group
+			.commit(&[add_bob_prop.clone(), update_alice_prop.clone()])
+			.unwrap();
 
 		// and get alice_group
 		let mut alice_group = group
@@ -1080,14 +1080,24 @@ mod tests {
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (update_bob_prop, _) = bob_group.propose_update();
 		// commits using his bob_group
-		let (fc, ctds, wlcms) = bob_group.commit(&[add_charlie_prop.clone(), update_alice_prop.clone(), update_bob_prop.clone()]).unwrap();
+		let (fc, ctds, wlcms) = bob_group
+			.commit(&[
+				add_charlie_prop.clone(),
+				update_alice_prop.clone(),
+				update_bob_prop.clone(),
+			])
+			.unwrap();
 
 		// alices processes
 		let mut alice_group = alice_group
 			.process(
 				&fc,
 				ctds.get(0).unwrap().1.as_ref(),
-				&[add_charlie_prop.clone(), update_alice_prop.clone(), update_bob_prop.clone()],
+				&[
+					add_charlie_prop.clone(),
+					update_alice_prop.clone(),
+					update_bob_prop.clone(),
+				],
 			)
 			.unwrap()
 			.unwrap();
@@ -1149,12 +1159,22 @@ mod tests {
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
 		let (update_charlie_prop, _) = charlie_group.propose_update();
 		let (update_alice_prop, _) = alice_group.propose_update();
-		let (fc, ctds, wlcms) = bob_group.commit(&[remove_alice_prop.clone(), update_charlie_prop.clone(), update_alice_prop.clone()]).unwrap();
+		let (fc, ctds, wlcms) = bob_group
+			.commit(&[
+				remove_alice_prop.clone(),
+				update_charlie_prop.clone(),
+				update_alice_prop.clone(),
+			])
+			.unwrap();
 		let alice_group = alice_group
 			.process(
 				&fc,
 				ctds.get(0).unwrap().1.as_ref(),
-				&[remove_alice_prop.clone(), update_alice_prop.clone(), update_charlie_prop.clone()],
+				&[
+					remove_alice_prop.clone(),
+					update_alice_prop.clone(),
+					update_charlie_prop.clone(),
+				],
 			)
 			.unwrap();
 
@@ -1165,7 +1185,11 @@ mod tests {
 			.process(
 				&fc,
 				ctds.get(1).unwrap().1.as_ref(),
-				&[remove_alice_prop.clone(), update_alice_prop.clone(), update_charlie_prop.clone()],
+				&[
+					remove_alice_prop.clone(),
+					update_alice_prop.clone(),
+					update_charlie_prop.clone(),
+				],
 			)
 			.unwrap()
 			.unwrap();
@@ -1174,7 +1198,11 @@ mod tests {
 			.process(
 				&fc,
 				ctds.get(2).unwrap().1.as_ref(),
-				&[remove_alice_prop.clone(), update_alice_prop, update_charlie_prop.clone()],
+				&[
+					remove_alice_prop.clone(),
+					update_alice_prop,
+					update_charlie_prop.clone(),
+				],
 			)
 			.unwrap()
 			.unwrap();
@@ -1197,6 +1225,90 @@ mod tests {
 		);
 		assert_eq!(charlie_group.secrets, bob_group.secrets);
 		assert!(!charlie_group.roster.contains(&alice_id));
+	}
+
+	#[test]
+	fn test_reuse_guard() {
+		let seed = [12u8; 16];
+		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_x448_kp = x448::KeyPair::generate();
+		let alice_skp = dilithium::KeyPair::generate();
+		let alice_id = Nid::new(b"aliceali", 0);
+		let alice = Owner {
+			id: alice_id.clone(),
+			kp: KeyPackage::new(
+				&alice_ekp.pk,
+				&alice_x448_kp.public,
+				&alice_skp.public,
+				&alice_skp.private,
+			),
+			ilum_dk: alice_ekp.sk,
+			x448_dk: alice_x448_kp.private,
+			ssk: alice_skp.private,
+		};
+
+		let mut alice_group = Group::create(seed, alice);
+
+		let bob_user_id = Nid::new(b"bobbobbo", 0);
+		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_x448_kp = x448::KeyPair::generate();
+		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_kp = KeyPackage::new(
+			&bob_user_ekp.pk,
+			&bob_x448_kp.public,
+			&bob_user_skp.public,
+			&bob_user_skp.private,
+		);
+		let (add_bob_prop, _) = alice_group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		// alice invite using her initial group
+		let (fc, ctds, wlcms) = alice_group
+			.commit(&[add_bob_prop.clone()])
+			.unwrap();
+
+		// and get alice_group
+		let mut alice_group = alice_group
+			.process(
+				&fc,
+				ctds.get(0).unwrap().1.as_ref(),
+				&[add_bob_prop],
+			)
+			.unwrap()
+			.unwrap();
+
+		// bob joins
+		let mut bob_group = Group::join(
+			&bob_user_id,
+			&bob_user_kp,
+			&bob_user_ekp.sk,
+			&bob_x448_kp.private,
+			&bob_user_skp.private,
+			&seed,
+			&wlcms.clone().unwrap().0,
+			wlcms.unwrap().1.get(0).unwrap(),
+		)
+		.unwrap();
+
+		assert_eq!(alice_group.uid, bob_group.uid);
+		assert_eq!(alice_group.epoch, bob_group.epoch);
+		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(alice_group.roster, bob_group.roster);
+		assert_eq!(
+			alice_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			alice_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
+		assert_eq!(alice_group.secrets, bob_group.secrets);
+
+		let (update_alice_prop, ct) = alice_group.propose_update();
+
+		// bob decrypts this ct just fine
+		assert_eq!(Ok(update_alice_prop.clone()), bob_group.decrypt(ct.clone()));
+		// but alice can't decrypt her own ct, for she has already consumed its key
+		assert_eq!(Err(Error::FailedToDeriveChainTreeKey), alice_group.decrypt::<FramedProposal>(ct));
 	}
 
 	#[test]

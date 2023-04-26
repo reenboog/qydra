@@ -39,7 +39,7 @@ impl EpochSecrets {
 	}
 }
 
-// TODO: introduce a type for tcx?
+// TODO: introduce a type for ctx?
 pub fn derive_epoch_secrets(
 	ctx: hash::Hash,
 	joiner_secret: &JoinerSecret,

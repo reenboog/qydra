@@ -28,6 +28,7 @@ pub enum Error {
 	BadProposalFormat,
 	WrongMacSize,
 	WrongNonceSize,
+	WrongReuseGuardSize,
 	BadFramedProposalFormat,
 	WrongCtiSize,
 	WrongIvSize,
@@ -508,6 +509,7 @@ impl From<&ciphertext::Ciphertext> for Ciphertext {
 			iv: val.iv.as_bytes().to_vec(),
 			sig: val.sig.as_bytes().to_vec(),
 			mac: val.mac.as_bytes().to_vec(),
+			reuse_grd: val.reuse_grd.as_bytes().to_vec(),
 		}
 	}
 }
@@ -537,6 +539,10 @@ impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
 				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
 			),
 			mac: val.mac.try_into().or(Err(Error::WrongMacSize))?,
+			reuse_grd: val
+				.reuse_grd
+				.try_into()
+				.or(Err(Error::WrongReuseGuardSize))?,
 		})
 	}
 }
@@ -556,7 +562,7 @@ impl Deserializable for ciphertext::Ciphertext {
 mod tests {
 	use crate::{
 		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member, nid,
-		proposal, roster,
+		proposal, reuse_guard, roster,
 		serializable::{Deserializable, Serializable},
 		x448,
 	};
@@ -781,6 +787,7 @@ mod tests {
 			iv: aes_gcm::Iv([78u8; 12]),
 			sig: dilithium::Signature::new([90u8; 4595]),
 			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let serialized = ct.serialize();
 		let deserialized = ciphertext::Ciphertext::deserialize(&serialized);

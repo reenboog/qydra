@@ -1,4 +1,4 @@
-use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id, nid::Nid};
+use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id, nid::Nid, reuse_guard};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -12,7 +12,7 @@ pub enum ContentType {
 	Commit,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Ciphertext {
 	pub content_type: ContentType,
 	pub content_id: Id,
@@ -24,4 +24,5 @@ pub struct Ciphertext {
 	pub iv: aes_gcm::Iv,
 	pub sig: dilithium::Signature,
 	pub mac: hmac::Digest,
+	pub reuse_grd: reuse_guard::ReuseGuard,
 }

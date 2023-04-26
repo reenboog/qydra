@@ -99,7 +99,6 @@ enum ContentType {
 
 message Ciphertext {
 	// TODO: timestamp against replay attacks?
-	// TODO: reuse guards against replay attacks?
 	required ContentType content_type = 1;
 	required bytes content_id = 2;
 	required bytes payload = 3;
@@ -110,6 +109,7 @@ message Ciphertext {
 	required bytes iv = 8;
 	required bytes sig = 9;
 	required bytes mac = 10;
+	required bytes reuse_grd = 11;
 }
 
 // message Message {

@@ -20,6 +20,7 @@ pub mod private_key;
 pub mod proposal;
 pub mod protocol;
 pub mod public_key;
+pub mod reuse_guard;
 pub mod roster;
 pub mod secret_tree;
 pub mod serializable;
