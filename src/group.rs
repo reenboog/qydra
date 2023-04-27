@@ -79,7 +79,7 @@ pub enum Error {
 // group state
 #[derive(Clone)]
 pub struct Group {
-	uid: Hash, // TODO: introduce a type? use id instead?
+	uid: Id,
 	epoch: u64,
 
 	// WARNING: seed should be public and shared among all participating keys; mPKE won't work otherwise
@@ -120,7 +120,7 @@ impl Group {
 	// generates a group owned by owner; recipients should use a different initializer!
 	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
 		let roster = Roster::from(Member::new(owner.id, owner.kp));
-		let uid = rand::thread_rng().gen::<Hash>();
+		let uid = Id(rand::thread_rng().gen());
 		let epoch = 0;
 		let joiner_secret = rand::thread_rng().gen();
 		let conf_trans_hash = hash::empty();
@@ -294,6 +294,7 @@ impl Group {
 	}
 
 	// means: "This proposal is signed by *ME* from the *GROUP* that has *STATE*"
+	// returns FramedProposal and its encrypted variant
 	fn frame_proposal(&mut self, proposal: Proposal) -> (FramedProposal, Ciphertext) {
 		let to_sign = Sha256::digest(
 			[
@@ -427,12 +428,15 @@ impl Group {
 		(package, ilum_kp.sk, x448_kp.private, dilithium_kp.private)
 	}
 
+	// returns FramedCommit (applied locally by those who commit), its encrypted variant, its ctds
+	// and an optional list of welcomes (cti & ctd)
 	pub fn commit(
 		&mut self,
 		fps: &[FramedProposal],
 	) -> Result<
 		(
 			FramedCommit,
+			Ciphertext,
 			Vec<(Nid, Option<hpkencrypt::CmpdCtd>)>,
 			Option<(WlcmCti, Vec<WlcmCtd>)>,
 		),
@@ -526,11 +530,9 @@ impl Group {
 			},
 		);
 
-		// FIXME: send this
-		let ct = self.encrypt(&framed_commit, ContentType::Commit);
+		let fc_ct = self.encrypt(&framed_commit, ContentType::Commit);
 
-		// TODO: encrypt fc and return alongside with framed_commit
-		Ok((framed_commit, ctds, welcomes))
+		Ok((framed_commit, fc_ct, ctds, welcomes))
 	}
 
 	pub fn process(
@@ -754,7 +756,7 @@ impl Group {
 		Sha256::digest(
 			[
 				// TODO: use ctx() instead of { uid, epoch }?
-				self.uid.as_slice(),
+				self.uid.as_bytes().as_slice(),
 				&self.epoch.to_be_bytes(),
 				&commit.hash(),
 				sig.as_bytes(),
@@ -946,10 +948,10 @@ impl Group {
 		)
 	}
 
-	fn derive_ctx(uid: &[u8], epoch: u64, roster: &Roster, conf_trans_hash: &[u8]) -> Hash {
+	fn derive_ctx(uid: &Id, epoch: u64, roster: &Roster, conf_trans_hash: &Hash) -> Hash {
 		Sha256::digest(
 			[
-				uid,
+				uid.as_bytes(),
 				epoch.to_be_bytes().as_slice(),
 				&roster.hash(),
 				conf_trans_hash,
@@ -962,8 +964,8 @@ impl Group {
 
 #[cfg(test)]
 mod tests {
-	use super::{Group, Owner, Error};
-	use crate::{dilithium, key_package::KeyPackage, nid::Nid, x448, proposal::FramedProposal};
+	use super::{Error, Group, Owner};
+	use crate::{dilithium, key_package::KeyPackage, nid::Nid, proposal::FramedProposal, x448, commit::FramedCommit};
 
 	#[test]
 	fn test_next() {
@@ -1006,7 +1008,7 @@ mod tests {
 			ssk: alice_skp.private,
 		};
 
-		let mut group = Group::create(seed, alice);
+		let mut alice_group = Group::create(seed, alice);
 
 		let bob_user_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
@@ -1018,18 +1020,18 @@ mod tests {
 			&bob_user_skp.public,
 			&bob_user_skp.private,
 		);
-		let (add_bob_prop, _) = group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
-		let (update_alice_prop, _) = group.propose_update();
-		// alice invite using her initial group
-		let (fc, ctds, wlcms) = group
+		let (add_bob_prop, _) = alice_group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		// alice invites using her initial group
+		let (fc, _, ctds, wlcms) = alice_group
 			.commit(&[add_bob_prop.clone(), update_alice_prop.clone()])
 			.unwrap();
 
 		// and get alice_group
-		let mut alice_group = group
+		let mut alice_group = alice_group
 			.process(
 				&fc,
-				ctds.get(0).unwrap().1.as_ref(),
+				ctds.first().unwrap().1.as_ref(),
 				&[add_bob_prop, update_alice_prop],
 			)
 			.unwrap()
@@ -1080,13 +1082,16 @@ mod tests {
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (update_bob_prop, _) = bob_group.propose_update();
 		// commits using his bob_group
-		let (fc, ctds, wlcms) = bob_group
+		let (fc, fc_ct, ctds, wlcms) = bob_group
 			.commit(&[
 				add_charlie_prop.clone(),
 				update_alice_prop.clone(),
 				update_bob_prop.clone(),
 			])
 			.unwrap();
+
+		// ensure recipients (alice for now) can decrypt the encrypted FramedCommit as well
+		assert!(alice_group.decrypt::<FramedCommit>(fc_ct).is_ok());
 
 		// alices processes
 		let mut alice_group = alice_group
@@ -1159,7 +1164,7 @@ mod tests {
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
 		let (update_charlie_prop, _) = charlie_group.propose_update();
 		let (update_alice_prop, _) = alice_group.propose_update();
-		let (fc, ctds, wlcms) = bob_group
+		let (fc, fc_ct, ctds, wlcms) = bob_group
 			.commit(&[
 				remove_alice_prop.clone(),
 				update_charlie_prop.clone(),
@@ -1194,9 +1199,12 @@ mod tests {
 			.unwrap()
 			.unwrap();
 
+		// decrypt using an encrypted fc this time instead
+		let decrypted_fc = charlie_group.decrypt::<FramedCommit>(fc_ct).unwrap();
+
 		let charlie_group = charlie_group
 			.process(
-				&fc,
+				&decrypted_fc,
 				ctds.get(2).unwrap().1.as_ref(),
 				&[
 					remove_alice_prop.clone(),
@@ -1259,19 +1267,15 @@ mod tests {
 			&bob_user_skp.public,
 			&bob_user_skp.private,
 		);
-		let (add_bob_prop, _) = alice_group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
-		// alice invite using her initial group
-		let (fc, ctds, wlcms) = alice_group
-			.commit(&[add_bob_prop.clone()])
+		let (add_bob_prop, _) = alice_group
+			.propose_add(bob_user_id, bob_user_kp.clone())
 			.unwrap();
+		// alice invite using her initial group
+		let (fc, _, ctds, wlcms) = alice_group.commit(&[add_bob_prop.clone()]).unwrap();
 
 		// and get alice_group
 		let mut alice_group = alice_group
-			.process(
-				&fc,
-				ctds.get(0).unwrap().1.as_ref(),
-				&[add_bob_prop],
-			)
+			.process(&fc, ctds.get(0).unwrap().1.as_ref(), &[add_bob_prop])
 			.unwrap()
 			.unwrap();
 
@@ -1308,7 +1312,10 @@ mod tests {
 		// bob decrypts this ct just fine
 		assert_eq!(Ok(update_alice_prop.clone()), bob_group.decrypt(ct.clone()));
 		// but alice can't decrypt her own ct, for she has already consumed its key
-		assert_eq!(Err(Error::FailedToDeriveChainTreeKey), alice_group.decrypt::<FramedProposal>(ct));
+		assert_eq!(
+			Err(Error::FailedToDeriveChainTreeKey),
+			alice_group.decrypt::<FramedProposal>(ct)
+		);
 	}
 
 	#[test]

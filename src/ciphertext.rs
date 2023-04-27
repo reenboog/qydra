@@ -17,7 +17,7 @@ pub struct Ciphertext {
 	pub content_type: ContentType,
 	pub content_id: Id,
 	pub payload: Vec<u8>,
-	pub guid: Hash,
+	pub guid: Id,
 	pub epoch: u64,
 	pub gen: u32,
 	pub sender: Nid,

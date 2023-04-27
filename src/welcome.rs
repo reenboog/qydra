@@ -41,7 +41,7 @@ impl WlcmCtd {
 // sent to each invitee hpke-encrypted
 #[derive(Clone)]
 pub struct Info {
-	pub guid: Hash,
+	pub guid: Id,
 	pub epoch: u64,
 	pub roster: Roster,
 	pub conf_trans_hash: Hash,
@@ -52,7 +52,7 @@ pub struct Info {
 
 impl Info {
 	pub fn new(
-		guid: Hash,
+		guid: Id,
 		epoch: u64,
 		roster: Roster,
 		conf_trans_hash: Hash,
@@ -76,7 +76,7 @@ impl Hashable for Info {
 	fn hash(&self) -> Hash {
 		Sha256::digest(
 			[
-				self.guid.as_slice(),
+				self.guid.as_bytes().as_slice(),
 				&self.epoch.to_be_bytes(),
 				&self.roster.hash(),
 				&self.conf_trans_hash,

@@ -167,7 +167,7 @@ impl Deserializable for roster::Roster {
 impl From<&welcome::Info> for GroupInfo {
 	fn from(val: &welcome::Info) -> Self {
 		Self {
-			guid: val.guid.to_vec(),
+			guid: val.guid.as_bytes().to_vec(),
 			epoch: val.epoch,
 			roster: (&val.roster).into(),
 			conf_trans_hash: val.conf_trans_hash.to_vec(),
@@ -189,7 +189,7 @@ impl TryFrom<GroupInfo> for welcome::Info {
 
 	fn try_from(val: GroupInfo) -> Result<Self, Self::Error> {
 		Ok(Self::new(
-			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			id::Id(val.guid.try_into().or(Err(Error::WrongGuidSize))?),
 			val.epoch,
 			val.roster.try_into().or(Err(Error::BadRosterFormat))?,
 			val.conf_trans_hash
@@ -277,7 +277,7 @@ impl Deserializable for proposal::Proposal {
 impl From<&proposal::FramedProposal> for FramedProposal {
 	fn from(val: &proposal::FramedProposal) -> Self {
 		Self {
-			guid: val.guid.to_vec(),
+			guid: val.guid.as_bytes().to_vec(),
 			epoch: val.epoch,
 			sender: val.sender.as_bytes().to_vec(),
 			prop: (&val.prop).into(),
@@ -298,7 +298,7 @@ impl TryFrom<FramedProposal> for proposal::FramedProposal {
 
 	fn try_from(val: FramedProposal) -> Result<Self, Self::Error> {
 		Ok(Self::new(
-			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			id::Id(val.guid.try_into().or(Err(Error::WrongGuidSize))?),
 			val.epoch,
 			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.prop.try_into().or(Err(Error::BadProposalFormat))?,
@@ -414,7 +414,7 @@ impl Deserializable for commit::Commit {
 impl From<&commit::FramedCommit> for FramedCommit {
 	fn from(val: &commit::FramedCommit) -> Self {
 		Self {
-			guid: val.guid.to_vec(),
+			guid: val.guid.as_bytes().to_vec(),
 			epoch: val.epoch,
 			sender: val.sender.as_bytes().to_vec(),
 			commit: (&val.commit).into(),
@@ -435,7 +435,7 @@ impl TryFrom<FramedCommit> for commit::FramedCommit {
 
 	fn try_from(val: FramedCommit) -> Result<Self, Self::Error> {
 		Ok(Self::new(
-			val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			id::Id(val.guid.try_into().or(Err(Error::WrongGuidSize))?),
 			val.epoch,
 			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.commit.try_into().or(Err(Error::BadCommitFormat))?,
@@ -502,7 +502,7 @@ impl From<&ciphertext::Ciphertext> for Ciphertext {
 			content_type: ContentType::from(&val.content_type).into(),
 			content_id: val.content_id.as_bytes().to_vec(),
 			payload: val.payload.clone(),
-			guid: val.guid.to_vec(),
+			guid: val.guid.as_bytes().to_vec(),
 			epoch: val.epoch,
 			gen: val.gen,
 			sender: val.sender.as_bytes().to_vec(),
@@ -530,7 +530,7 @@ impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
 			),
 			content_id: id::Id(val.content_id.try_into().or(Err(Error::WrongIdSize))?),
 			payload: val.payload,
-			guid: val.guid.try_into().or(Err(Error::WrongGuidSize))?,
+			guid: id::Id(val.guid.try_into().or(Err(Error::WrongGuidSize))?),
 			epoch: val.epoch,
 			gen: val.gen,
 			sender: nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
@@ -686,7 +686,7 @@ mod tests {
 			kp,
 		};
 		let fc = proposal::FramedProposal::new(
-			[123u8; 32],
+			id::Id([123u8; 32]),
 			17u64,
 			nid::Nid::new(b"ijklmnop", 0),
 			prop,
@@ -761,7 +761,7 @@ mod tests {
 		};
 
 		let fc = commit::FramedCommit::new(
-			[88u8; 32],
+			id::Id([88u8; 32]),
 			42,
 			nid::Nid::new(b"abcdefgh", 0),
 			commit,
@@ -780,7 +780,7 @@ mod tests {
 			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
-			guid: [34u8; 32],
+			guid: id::Id([34u8; 32]),
 			epoch: 77,
 			gen: 1984,
 			sender: nid::Nid::new(b"abcdefgh", 0),

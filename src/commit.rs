@@ -49,7 +49,7 @@ impl Hashable for Commit {
 // I already have types for Cti & Ctd, but sym enc is now required (Cti)
 #[derive(Debug, PartialEq)]
 pub struct FramedCommit {
-	pub guid: Hash,
+	pub guid: Id,
 	pub epoch: u64,
 	pub sender: Nid,
 	pub commit: Commit,
@@ -60,7 +60,7 @@ pub struct FramedCommit {
 
 impl FramedCommit {
 	pub fn new(
-		guid: Hash,
+		guid: Id,
 		epoch: u64,
 		sender: Nid,
 		commit: Commit,
@@ -82,7 +82,7 @@ impl Identifiable for FramedCommit {
 	fn id(&self) -> Id {
 		Id(Sha256::digest(
 			[
-				self.guid.as_slice(),
+				self.guid.as_bytes().as_slice(),
 				&self.epoch.to_be_bytes(),
 				self.sender.as_bytes().as_slice(),
 				&self.commit.hash(),

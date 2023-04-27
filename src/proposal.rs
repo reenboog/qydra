@@ -70,7 +70,7 @@ pub struct Nonce(pub [u8; 4]);
 // otherwise, its corresponding chain_tree entry will be consumed immediately when encrypting and decrypting my
 // own proposal wouldn't be possible (unless a copy of my hs encryption chain is employed)
 pub struct FramedProposal {
-	pub guid: Hash,
+	pub guid: Id,
 	pub epoch: u64,
 	pub sender: Nid,
 	pub prop: Proposal,
@@ -88,7 +88,7 @@ pub struct UnframedProposal {
 
 impl FramedProposal {
 	pub fn new(
-		guid: Hash,
+		guid: Id,
 		epoch: u64,
 		sender: Nid,
 		prop: Proposal,
@@ -114,7 +114,7 @@ impl Identifiable for FramedProposal {
 
 		Id(Sha256::digest(
 			[
-				&self.guid,
+				self.guid.as_bytes(),
 				self.epoch.to_be_bytes().as_slice(),
 				self.sender.as_bytes().as_slice(),
 				&self.prop.hash(),
