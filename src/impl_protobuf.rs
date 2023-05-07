@@ -2,7 +2,7 @@ include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
 use crate::{
 	aes_gcm, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, nid, proposal,
-	roster,
+	protocol, roster,
 	serializable::{Deserializable, Serializable},
 	welcome,
 };
@@ -31,12 +31,19 @@ pub enum Error {
 	WrongReuseGuardSize,
 	BadFramedProposalFormat,
 	WrongCtiSize,
+	WrongCtdSize,
 	WrongIvSize,
 	BadCtiFormat,
+	BadCtdFormat,
+	BadWlcmCtiFormat,
+	BadWlcmCtdFormat,
+	BadSendWelcomeFormat,
 	BadCommitFormat,
 	BadFramedCommitFormat,
+	BadCommitCtdFormat,
 	UnknownContentType,
 	BadCiphertextFormat,
+	WrongKeyPackageIdSize,
 }
 
 // KeyPackage
@@ -213,6 +220,134 @@ impl Deserializable for welcome::Info {
 	}
 }
 
+// WlcmCti
+impl From<&welcome::WlcmCti> for WlcmCti {
+	fn from(val: &welcome::WlcmCti) -> Self {
+		Self {
+			cti: (&val.cti).into(),
+			sig: val.sig.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for welcome::WlcmCti {
+	fn serialize(&self) -> Vec<u8> {
+		WlcmCti::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<WlcmCti> for welcome::WlcmCti {
+	type Error = Error;
+
+	fn try_from(val: WlcmCti) -> Result<Self, Self::Error> {
+		Ok(Self {
+			cti: val.cti.try_into().or(Err(Error::BadCtiFormat))?,
+			sig: dilithium::Signature::new(
+				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
+			),
+		})
+	}
+}
+
+impl Deserializable for welcome::WlcmCti {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(WlcmCti::decode(buf).or(Err(Error::BadWlcmCtiFormat))?)
+	}
+}
+
+// WlcmCtd
+impl From<&welcome::WlcmCtd> for WlcmCtd {
+	fn from(val: &welcome::WlcmCtd) -> Self {
+		Self {
+			user_id: val.user_id.as_bytes().to_vec(),
+			key_id: val.key_id.as_bytes().to_vec(),
+			ctd: (&val.ctd).into(),
+		}
+	}
+}
+
+impl Serializable for welcome::WlcmCtd {
+	fn serialize(&self) -> Vec<u8> {
+		WlcmCtd::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<WlcmCtd> for welcome::WlcmCtd {
+	type Error = Error;
+
+	fn try_from(val: WlcmCtd) -> Result<Self, Self::Error> {
+		Ok(Self {
+			user_id: nid::Nid::try_from(val.user_id).or(Err(Error::WrongNidSize))?,
+			key_id: id::Id(
+				val.key_id
+					.try_into()
+					.or(Err(Error::WrongKeyPackageIdSize))?,
+			),
+			ctd: hpkencrypt::CmpdCtd::try_from(val.ctd).or(Err(Error::BadCtdFormat))?,
+		})
+	}
+}
+
+impl Deserializable for welcome::WlcmCtd {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(WlcmCtd::decode(buf).or(Err(Error::BadWlcmCtdFormat))?)
+	}
+}
+
+// SendWelcome
+impl From<&protocol::SendWelcome> for SendWelcome {
+	fn from(val: &protocol::SendWelcome) -> Self {
+		Self {
+			cti: (&val.cti).into(),
+			ctds: val.ctds.iter().map(|ctd| ctd.into()).collect(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendWelcome {
+	fn serialize(&self) -> Vec<u8> {
+		SendWelcome::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendWelcome> for protocol::SendWelcome {
+	type Error = Error;
+
+	fn try_from(val: SendWelcome) -> Result<Self, Self::Error> {
+		Ok(Self {
+			cti: val.cti.try_into().or(Err(Error::BadWlcmCtiFormat))?,
+			ctds: val
+				.ctds
+				.iter()
+				.map(|ctd| {
+					Ok(welcome::WlcmCtd::try_from(ctd.clone()).or(Err(Error::BadWlcmCtdFormat))?)
+				})
+				.collect::<Result<Vec<welcome::WlcmCtd>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendWelcome {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendWelcome::decode(buf).or(Err(Error::BadSendWelcomeFormat))?)
+	}
+}
+
 // Proposal
 impl From<&proposal::Proposal> for Prop {
 	fn from(val: &proposal::Proposal) -> Self {
@@ -362,6 +497,44 @@ impl Deserializable for hpkencrypt::CmpdCti {
 	}
 }
 
+// CmpdCtd
+impl From<&hpkencrypt::CmpdCtd> for CmpdCtd {
+	fn from(val: &hpkencrypt::CmpdCtd) -> Self {
+		Self {
+			ilum_ctd: val.ilum_ctd.to_vec(),
+			ecc_ctd: val.ecc_ctd.clone(),
+		}
+	}
+}
+
+impl Serializable for hpkencrypt::CmpdCtd {
+	fn serialize(&self) -> Vec<u8> {
+		CmpdCtd::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<CmpdCtd> for hpkencrypt::CmpdCtd {
+	type Error = Error;
+
+	fn try_from(val: CmpdCtd) -> Result<Self, Self::Error> {
+		Ok(Self::new(
+			val.ilum_ctd.try_into().or(Err(Error::WrongCtdSize))?,
+			val.ecc_ctd,
+		))
+	}
+}
+
+impl Deserializable for hpkencrypt::CmpdCtd {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(CmpdCtd::decode(buf).or(Err(Error::BadCtdFormat))?)
+	}
+}
+
 // Commit
 impl From<&commit::Commit> for Commit {
 	fn from(val: &commit::Commit) -> Self {
@@ -453,6 +626,46 @@ impl Deserializable for commit::FramedCommit {
 		Self: Sized,
 	{
 		Self::try_from(FramedCommit::decode(buf).or(Err(Error::BadFramedCommitFormat))?)
+	}
+}
+
+// CommitCtd
+impl From<&commit::CommitCtd> for CommitCtd {
+	fn from(val: &commit::CommitCtd) -> Self {
+		Self {
+			user_id: val.user_id.as_bytes().to_vec(),
+			ctd: val.ctd.as_ref().map(|ctd| ctd.into()),
+		}
+	}
+}
+
+impl Serializable for commit::CommitCtd {
+	fn serialize(&self) -> Vec<u8> {
+		CommitCtd::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<CommitCtd> for commit::CommitCtd {
+	type Error = Error;
+
+	fn try_from(val: CommitCtd) -> Result<Self, Self::Error> {
+		Ok(Self::new(
+			nid::Nid::try_from(val.user_id).or(Err(Error::WrongNidSize))?,
+			val.ctd
+				.map(|ctd| hpkencrypt::CmpdCtd::try_from(ctd))
+				.transpose()?,
+		))
+	}
+}
+
+impl Deserializable for commit::CommitCtd {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(CommitCtd::decode(buf).or(Err(Error::BadCommitCtdFormat))?)
 	}
 }
 
@@ -558,13 +771,15 @@ impl Deserializable for ciphertext::Ciphertext {
 	}
 }
 
+// Send
+
 #[cfg(test)]
 mod tests {
 	use crate::{
 		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member, nid,
-		proposal, reuse_guard, roster,
+		proposal, protocol, reuse_guard, roster,
 		serializable::{Deserializable, Serializable},
-		x448,
+		welcome, x448,
 	};
 
 	#[test]
@@ -716,6 +931,71 @@ mod tests {
 	}
 
 	#[test]
+	fn test_cmpd_ctd() {
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let serialized = ctd.serialize();
+		let deserialized = hpkencrypt::CmpdCtd::deserialize(&serialized);
+
+		assert_eq!(Ok(ctd), deserialized);
+	}
+
+	#[test]
+	fn test_wlcm_cti() {
+		let cti = hpkencrypt::CmpdCti::new(
+			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
+		);
+		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let serialized = wcti.serialize();
+		let deserialized = welcome::WlcmCti::deserialize(&serialized);
+
+		assert_eq!(Ok(wcti), deserialized);
+	}
+
+	#[test]
+	fn test_wlcm_ctd() {
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
+		let serialized = wctd.serialize();
+		let deserialized = welcome::WlcmCtd::deserialize(&serialized);
+
+		assert_eq!(Ok(wctd), deserialized);
+	}
+
+	#[test]
+	fn test_send_welcome() {
+		let cti = hpkencrypt::CmpdCti::new(
+			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
+		);
+		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let sw = protocol::SendWelcome {
+			cti: wcti,
+			ctds: vec![
+				welcome::WlcmCtd::new(
+					nid::Nid::new(b"abcdefgh", 1),
+					id::Id([22u8; 32]),
+					hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]),
+				),
+				welcome::WlcmCtd::new(
+					nid::Nid::new(b"dhdsjdsj", 1),
+					id::Id([42u8; 32]),
+					hpkencrypt::CmpdCtd::new([51u8; 48], vec![8, 9, 0]),
+				),
+			],
+		};
+
+		let serialized = sw.serialize();
+		let deserialized = protocol::SendWelcome::deserialize(&serialized);
+
+		assert_eq!(Ok(sw), deserialized);
+	}
+
+	#[test]
 	fn test_commit() {
 		let kp = key_package::KeyPackage {
 			ilum_ek: [56u8; 768],
@@ -772,6 +1052,22 @@ mod tests {
 		let deserialized = commit::FramedCommit::deserialize(&serialized);
 
 		assert_eq!(Ok(fc), deserialized);
+	}
+
+	#[test]
+	fn test_commit_ctd() {
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let commit_ctd = commit::CommitCtd::new(nid::Nid::new(b"abcdefgh", 0), Some(ctd));
+		let serialized = commit_ctd.serialize();
+		let deserialized = commit::CommitCtd::deserialize(&serialized);
+
+		assert_eq!(Ok(commit_ctd), deserialized);
+
+		let commit_ctd = commit::CommitCtd::new(nid::Nid::new(b"ijklmnop", 0), None);
+		let serialized = commit_ctd.serialize();
+		let deserialized = commit::CommitCtd::deserialize(&serialized);
+
+		assert_eq!(Ok(commit_ctd), deserialized);
 	}
 
 	#[test]

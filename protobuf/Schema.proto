@@ -73,6 +73,11 @@ message CmpdCti {
 	required bytes ilum_cti = 4;
 }
 
+message CmpdCtd {
+	required bytes ilum_ctd = 1;
+	required bytes ecc_ctd = 2;
+}
+
 message Commit {
 	required KeyPackage kp = 1;
 	required CmpdCti cti = 2;
@@ -88,14 +93,17 @@ message FramedCommit {
 	required bytes conf_tag = 6;
 }
 
+message CommitCtd {
+	required bytes user_id = 1;
+	// nil for evictees
+	optional CmpdCtd ctd = 2;
+}
+
 enum ContentType {
 	App = 1;
 	Propsl = 2;
 	Commt = 3;
-	// how about Welcome?
 }
-
-// TODO: also send cmpd ctds (proposals, commits, welcomes)
 
 message Ciphertext {
 	// TODO: timestamp against replay attacks?
@@ -112,9 +120,125 @@ message Ciphertext {
 	required bytes reuse_grd = 11;
 }
 
-// message Message {
-	// proposal
-	// commit
-	// welcome
-	// app
+message WlcmCti {
+	required CmpdCti cti = 1;
+	required bytes sig = 2;
+}
+
+message WlcmCtd {
+	required bytes user_id = 1;
+	required bytes key_id = 2;
+	required CmpdCtd ctd = 3;
+}
+
+message SendWelcome {
+	// for the backend to fanout this:
+	// ctds.for_each(|ctd| {
+	//	send_to(ctd.user_id, ReceivedWlcm { cti, ctd.ctd, ctd.key_id })
+	// })
+	required WlcmCti cti = 1;
+	repeated WlcmCtd ctds = 2;
+}
+
+message SendCommit {
+	// for the backend to fanout this:
+	// ctds.for_each(|ctd| {
+	//	send_to(ctd.user_id, ReceivedCommit { cti, ctd.ctd })
+	// })
+	required Ciphertext cti = 1;
+	repeated CommitCtd ctds = 2;
+}
+
+message SendProposal {
+	repeated SendCiphertext props = 1;
+}
+
+message SendCiphertext {
+	required bytes user_id = 1;
+	required Ciphertext payload = 2;
+}
+
+// // sent by clients and processed by the backend
+// message Send {
+// 	// several welcomes can be sent when someone is invited
+// 	optional SendWelcome wlcms = 1;
+// 	// and/or one commit
+// 	optional SendCommit commit = 2;
+// 	// and/or several proposals
+// 	optional SendProposal props = 3;
+// 	// or a message
+// 	optional SendCiphertext app_msg = 4;
+// }
+
+message Send {
+	message Add {
+		required SendCommit commit = 1;
+		required SendProposal props = 2;
+	}
+
+	message Invite {
+		required SendWelcome wlcm = 1;
+		optional Add add = 2;
+	}
+	
+	message Remove {
+		required SendCommit commit = 1;
+		required SendProposal props = 2;
+	}
+
+	oneof variant {
+		Invite invite = 1;
+		Remove remove = 2;
+		SendProposal props = 3; // update proposals; TODO: SendCiphertext instead? It's just one update proposal
+		SendCommit commit = 4; // update commit
+		SendCiphertext msg = 5;
+	}
+}
+
+message ReceivedWelcome {
+	required WlcmCti cti = 1;
+	required CmpdCtd ctd = 2;
+	required bytes key_id = 3;
+}
+
+message ReceivedCommit {
+	required Ciphertext cti = 1;
+	// nil if evicted
+	optional CmpdCtd ctd = 2; 
+}
+
+message ReceivedProposal {
+	repeated Ciphertext props = 1;
+}
+
+message Received {
+	message Add {
+		required ReceivedCommit commit = 1;
+		required ReceivedProposal props = 2;
+	}
+	message Remove {
+		required ReceivedCommit commit = 1;
+		required ReceivedProposal props = 2;
+	}
+
+	oneof variant {
+		ReceivedWelcome wlcm = 1;
+		Add add = 2;
+		Remove remove = 3;
+		ReceivedProposal props = 4; // update proposals
+		ReceivedCommit commit = 5;
+		Ciphertext msg = 6;
+	}
+}
+
+// // sent by the backend and processed by clients
+// message Received {
+// 	// either a welcome
+// 	optional ReceivedWelcome wlcm = 1;
+// 	// or a commit
+// 	optional ReceivedCommit commit = 2;
+// 	// and/or several proposals
+// 	optional ReceivedProposal props = 3;
+// 	// or a message
+// 	optional Ciphertext app_msg = 4;
 // }

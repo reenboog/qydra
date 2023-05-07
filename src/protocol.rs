@@ -43,29 +43,52 @@
 use std::sync::Arc;
 
 use crate::{
+	ciphertext::Ciphertext,
 	commit::FramedCommit,
-	group::{Group, Owner},
+	group::{self, Group, Owner},
 	hash::Hash,
 	id::Id,
 	key_package::KeyPackage,
 	nid::Nid,
 	proposal::FramedProposal,
+	serializable::Serializable,
 	welcome::{WlcmCtd, WlcmCti},
 };
 
 // a randomly generated public seed that is to be used for all instances of this protocol in order for mPKE to work
-const ILUM_SEED: &[u8; 16] = b"\x96\x48\xb8\x08\x8b\x16\x1c\xf1\x22\xee\xb4\x5a\x29\x69\x02\x43";
+pub const ILUM_SEED: &[u8; 16] =
+	b"\x96\x48\xb8\x08\x8b\x16\x1c\xf1\x22\xee\xb4\x5a\x29\x69\x02\x43";
 
-// pub struct Owner {
-// 	id: Id,
-// 	kp: KeyPackage,
-// 	ilum_dk: ilum::SecretKey,
-// 	x448_dk: x448::PrivateKey,
-// 	ssk: dilithium::PrivateKey,
-// }
+#[derive(Debug)]
+pub enum Error {
+	FailedToCreate,
+}
+
+impl From<group::Error> for Error {
+	fn from(val: group::Error) -> Self {
+		match val {
+			_ => Error::FailedToCreate,
+		}
+	}
+}
+
+#[derive(PartialEq, Debug)]
+pub struct SendWelcome {
+	pub cti: WlcmCti,
+	pub ctds: Vec<WlcmCtd>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Send {
+	//
+}
+
+pub struct Received {
+	//
+}
 
 pub trait Storage {
-	//
+	fn save_group(&self, group: &[u8], uid: &[u8], epoch: u64, roster: Vec<&[u8]>);
 }
 
 // TODO: make async
@@ -79,22 +102,68 @@ pub struct Protocol<S, A> {
 	api: Arc<A>,
 }
 
+pub struct CreateGroup {
+	id: Id,
+	// high level message
+}
+
 impl<S, A> Protocol<S, A>
 where
 	S: Storage,
 	A: Api,
 {
-	pub fn create_group(&self, owner: Owner, invitees: &[Nid]) {
-		let kps = self.api.fetch_key_packages(invitees);
-		let group = Group::create(ILUM_SEED.to_owned(), owner);
-		// let props = kps.iter().map(|nid| group.propose_add(kp.ni, kp).collect();
-		// fetch prekeys
-		// create group
+	pub fn handle_received(&self, rcvd: &Received) -> Result<(), Error> {
+		// respect out of order messages: ServerTimestamp?
+		// wlcm
 		// commit
-		// apply commit
-		// save group
-		// send welcomes
+		// props
+		// msg
+		todo!()
 	}
+
+	// invitees should NOT contain the group owner, or the process will fail upon proposing
+	// pub fn create_group(&self, owner: Owner, invitees: &[Nid]) -> Result<Id, Error> {
+	// 	// fetch prekeys
+	// 	let kps = self.api.fetch_key_packages(invitees);
+	// 	// create a group of size 1 containing just me
+	// 	let mut group = Group::create(ILUM_SEED.to_owned(), owner);
+	// 	// propose to add everyone
+	// 	let fps = invitees
+	// 		.into_iter()
+	// 		.zip(kps.into_iter())
+	// 		.map(|(nid, kp)| {
+	// 			group
+	// 				.propose_add(*nid, kp)
+	// 				.map(|(fp, _)| fp)
+	// 				.map_err(|e| e.into())
+	// 		})
+	// 		.collect::<Result<Vec<FramedProposal>, Error>>()?;
+
+	// 	// commit the proposal
+	// 	let (fc, _, ctds, wlcms) = group.commit(&fps)?;
+	// 	// this processed group will now have everyine in it
+	// 	let group = group
+	// 		.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)?
+	// 		.unwrap();
+	// 	// process my own proposal
+	// 	//
+	// 	// send welcomes to everyone
+	// 	// save state
+
+	// 	self.save_group(&group);
+
+	// 	Ok(group.uid())
+	// }
+
+	// fn save_group(&self, group: &Group) {
+	// 	let roster: Vec<Vec<u8>> = group.roster().ids().iter().map(|n| n.as_bytes()).collect();
+	// 	self.storage.save_group(
+	// 		&group.serialize(),
+	// 		group.uid().as_bytes(),
+	// 		group.epoch(),
+	// 		roster.iter().map(|n| n.as_slice()).collect(),
+	// 	);
+	// }
 }
 
 // enum Message {

@@ -9,7 +9,7 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct WlcmCti {
 	pub cti: hpkencrypt::CmpdCti,
 	pub sig: Signature,
@@ -21,7 +21,7 @@ impl WlcmCti {
 	}
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct WlcmCtd {
 	pub user_id: Nid,
 	pub key_id: Id,
