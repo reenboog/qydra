@@ -41,6 +41,7 @@ pub enum Error {
 	BadCommitFormat,
 	BadFramedCommitFormat,
 	BadCommitCtdFormat,
+	BadSendCommitFormat,
 	UnknownContentType,
 	BadCiphertextFormat,
 	WrongKeyPackageIdSize,
@@ -669,6 +670,53 @@ impl Deserializable for commit::CommitCtd {
 	}
 }
 
+// SendCommit
+impl From<&protocol::SendCommit> for SendCommit {
+	fn from(val: &protocol::SendCommit) -> Self {
+		Self {
+			cti: (&val.cti).into(),
+			ctds: val.ctds.iter().map(|ctd| ctd.into()).collect(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendCommit {
+	fn serialize(&self) -> Vec<u8> {
+		SendCommit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendCommit> for protocol::SendCommit {
+	type Error = Error;
+
+	fn try_from(val: SendCommit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			cti: val.cti.try_into().or(Err(Error::BadCiphertextFormat))?,
+			ctds: val
+				.ctds
+				.iter()
+				.map(|ctd| {
+					Ok(commit::CommitCtd::try_from(ctd.clone())
+						.or(Err(Error::BadCommitCtdFormat))?)
+				})
+				.collect::<Result<Vec<commit::CommitCtd>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendCommit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendCommit::decode(buf).or(Err(Error::BadSendCommitFormat))?)
+	}
+}
+
+// ContentType; TODO: remove?
+
 impl From<&ciphertext::ContentType> for ContentType {
 	fn from(val: &ciphertext::ContentType) -> Self {
 		use ciphertext::ContentType as Cct;
@@ -1068,6 +1116,37 @@ mod tests {
 		let deserialized = commit::CommitCtd::deserialize(&serialized);
 
 		assert_eq!(Ok(commit_ctd), deserialized);
+	}
+
+	#[test]
+	fn test_send_commit() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = protocol::SendCommit {
+			cti,
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let serialized = sc.serialize();
+		let deserialized = protocol::SendCommit::deserialize(&serialized);
+
+		assert_eq!(Ok(sc), deserialized);
 	}
 
 	#[test]

@@ -44,7 +44,7 @@ use std::sync::Arc;
 
 use crate::{
 	ciphertext::Ciphertext,
-	commit::FramedCommit,
+	commit::{CommitCtd, FramedCommit},
 	group::{self, Group, Owner},
 	hash::Hash,
 	id::Id,
@@ -78,6 +78,12 @@ pub struct SendWelcome {
 	pub ctds: Vec<WlcmCtd>,
 }
 
+#[derive(PartialEq, Debug)]
+pub struct SendCommit {
+	pub cti: Ciphertext,
+	pub ctds: Vec<CommitCtd>,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Send {
 	//
@@ -100,11 +106,6 @@ pub trait Api {
 pub struct Protocol<S, A> {
 	storage: Arc<S>,
 	api: Arc<A>,
-}
-
-pub struct CreateGroup {
-	id: Id,
-	// high level message
 }
 
 impl<S, A> Protocol<S, A>
