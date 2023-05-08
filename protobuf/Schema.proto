@@ -127,17 +127,8 @@ message WlcmCti {
 
 message WlcmCtd {
 	required bytes user_id = 1;
-	required bytes key_id = 2;
+	required bytes kp_id = 2;
 	required CmpdCtd ctd = 3;
-}
-
-message SendWelcome {
-	// for the backend to fanout this:
-	// ctds.for_each(|ctd| {
-	//	send_to(ctd.user_id, ReceivedWlcm { cti, ctd.ctd, ctd.key_id })
-	// })
-	required WlcmCti cti = 1;
-	repeated WlcmCtd ctds = 2;
 }
 
 message SendCommit {
@@ -149,96 +140,98 @@ message SendCommit {
 	repeated CommitCtd ctds = 2;
 }
 
+// FIXME: introduce LEAVE
+
+// combines a set of proposals into one
 message SendProposal {
-	repeated SendCiphertext props = 1;
+	// each proposal is sent to each of the recipients below
+	repeated Ciphertext props = 1;
+	repeated bytes recipients = 2;
 }
 
-message SendCiphertext {
-	required bytes user_id = 1;
+message SendMsg {
+	repeated bytes recipients = 1;
 	required Ciphertext payload = 2;
 }
 
-// // sent by clients and processed by the backend
-// message Send {
-// 	// several welcomes can be sent when someone is invited
-// 	optional SendWelcome wlcms = 1;
-// 	// and/or one commit
-// 	optional SendCommit commit = 2;
-// 	// and/or several proposals
-// 	optional SendProposal props = 3;
-// 	// or a message
-// 	optional SendCiphertext app_msg = 4;
-// }
+message SendAdd {
+	// commit & each prop is sent to commit.ctds.user_id
+	repeated Ciphertext props = 1;
+	required SendCommit commit = 2;
+}
+
+message SendInvite {
+	// for the backend to fanout this:
+	// wctds.for_each(|ctd| {
+	//	send_to(ctd.user_id, ReceivedWlcm { wcti, ctd.ctd, ctd.kp_id })
+	// })
+	// welcome cti
+	required WlcmCti wcti = 1;
+	// welcome ctds
+	repeated WlcmCtd wctds = 2;
+	// props & commit sent to the existing peers, if any; nil, if the group has just been created
+	optional SendAdd add = 3;
+}
+
+message SendRemove {
+	// commit & each prop is sent to commit.ctds.user_id
+	repeated Ciphertext props = 1;
+	required SendCommit commit = 2;
+}
 
 message Send {
-	message Add {
-		required SendCommit commit = 1;
-		required SendProposal props = 2;
-	}
-
-	message Invite {
-		required SendWelcome wlcm = 1;
-		optional Add add = 2;
-	}
-	
-	message Remove {
-		required SendCommit commit = 1;
-		required SendProposal props = 2;
-	}
-
 	oneof variant {
-		Invite invite = 1;
-		Remove remove = 2;
-		SendProposal props = 3; // update proposals; TODO: SendCiphertext instead? It's just one update proposal
-		SendCommit commit = 4; // update commit
-		SendCiphertext msg = 5;
+		// a combined (props, commit)
+		SendInvite invite = 1;
+		// a combined (props, commit)
+		SendRemove remove = 2;
+		// usually just update proposals, but can be more generic
+		SendProposal props = 3; 
+		// update commit, but can be more generic
+		SendCommit commit = 4; 
+		// an arbitrary app message
+		SendMsg msg = 5;
 	}
 }
 
 message ReceivedWelcome {
 	required WlcmCti cti = 1;
 	required CmpdCtd ctd = 2;
-	required bytes key_id = 3;
+	required bytes kp_id = 3;
 }
 
 message ReceivedCommit {
 	required Ciphertext cti = 1;
-	// nil if evicted
-	optional CmpdCtd ctd = 2; 
+	required CmpdCtd ctd = 2; 
 }
 
 message ReceivedProposal {
 	repeated Ciphertext props = 1;
 }
 
-message Received {
-	message Add {
-		required ReceivedCommit commit = 1;
-		required ReceivedProposal props = 2;
-	}
-	message Remove {
-		required ReceivedCommit commit = 1;
-		required ReceivedProposal props = 2;
-	}
+message ReceivedAdd {
+	required ReceivedProposal props = 1;
+	required ReceivedCommit commit = 2;
+}
 
+message ReceivedRemove {
+	required ReceivedProposal props = 1;
+	// commit cti & ctd
+	required Ciphertext cti = 2;
+	// nil if evicted
+	optional CmpdCtd ctd = 3; 
+}
+
+message Received {
 	oneof variant {
 		ReceivedWelcome wlcm = 1;
-		Add add = 2;
-		Remove remove = 3;
-		ReceivedProposal props = 4; // update proposals
+		ReceivedAdd add = 2;
+		ReceivedRemove remove = 3;
+		// update proposals, but can be more generic
+		ReceivedProposal props = 4;
+		// update commit, but can be more generic
 		ReceivedCommit commit = 5;
+		// an arbitrary app message
 		Ciphertext msg = 6;
 	}
 }
-
-// // sent by the backend and processed by clients
-// message Received {
-// 	// either a welcome
-// 	optional ReceivedWelcome wlcm = 1;
-// 	// or a commit
-// 	optional ReceivedCommit commit = 2;
-// 	// and/or several proposals
-// 	optional ReceivedProposal props = 3;
-// 	// or a message
-// 	optional Ciphertext app_msg = 4;
-// }

@@ -45,6 +45,8 @@ pub enum Error {
 	UnknownContentType,
 	BadCiphertextFormat,
 	WrongKeyPackageIdSize,
+	BadSendAddFormat,
+	BadSendInviteFormat,
 }
 
 // KeyPackage
@@ -266,7 +268,7 @@ impl From<&welcome::WlcmCtd> for WlcmCtd {
 	fn from(val: &welcome::WlcmCtd) -> Self {
 		Self {
 			user_id: val.user_id.as_bytes().to_vec(),
-			key_id: val.key_id.as_bytes().to_vec(),
+			kp_id: val.kp_id.as_bytes().to_vec(),
 			ctd: (&val.ctd).into(),
 		}
 	}
@@ -284,11 +286,7 @@ impl TryFrom<WlcmCtd> for welcome::WlcmCtd {
 	fn try_from(val: WlcmCtd) -> Result<Self, Self::Error> {
 		Ok(Self {
 			user_id: nid::Nid::try_from(val.user_id).or(Err(Error::WrongNidSize))?,
-			key_id: id::Id(
-				val.key_id
-					.try_into()
-					.or(Err(Error::WrongKeyPackageIdSize))?,
-			),
+			kp_id: id::Id(val.kp_id.try_into().or(Err(Error::WrongKeyPackageIdSize))?),
 			ctd: hpkencrypt::CmpdCtd::try_from(val.ctd).or(Err(Error::BadCtdFormat))?,
 		})
 	}
@@ -302,50 +300,6 @@ impl Deserializable for welcome::WlcmCtd {
 		Self: Sized,
 	{
 		Self::try_from(WlcmCtd::decode(buf).or(Err(Error::BadWlcmCtdFormat))?)
-	}
-}
-
-// SendWelcome
-impl From<&protocol::SendWelcome> for SendWelcome {
-	fn from(val: &protocol::SendWelcome) -> Self {
-		Self {
-			cti: (&val.cti).into(),
-			ctds: val.ctds.iter().map(|ctd| ctd.into()).collect(),
-		}
-	}
-}
-
-impl Serializable for protocol::SendWelcome {
-	fn serialize(&self) -> Vec<u8> {
-		SendWelcome::from(self).encode_to_vec()
-	}
-}
-
-impl TryFrom<SendWelcome> for protocol::SendWelcome {
-	type Error = Error;
-
-	fn try_from(val: SendWelcome) -> Result<Self, Self::Error> {
-		Ok(Self {
-			cti: val.cti.try_into().or(Err(Error::BadWlcmCtiFormat))?,
-			ctds: val
-				.ctds
-				.iter()
-				.map(|ctd| {
-					Ok(welcome::WlcmCtd::try_from(ctd.clone()).or(Err(Error::BadWlcmCtdFormat))?)
-				})
-				.collect::<Result<Vec<welcome::WlcmCtd>, Error>>()?,
-		})
-	}
-}
-
-impl Deserializable for protocol::SendWelcome {
-	type Error = Error;
-
-	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
-	where
-		Self: Sized,
-	{
-		Self::try_from(SendWelcome::decode(buf).or(Err(Error::BadSendWelcomeFormat))?)
 	}
 }
 
@@ -715,6 +669,98 @@ impl Deserializable for protocol::SendCommit {
 	}
 }
 
+// SendAdd
+impl From<&protocol::SendAdd> for SendAdd {
+	fn from(val: &protocol::SendAdd) -> Self {
+		Self {
+			props: val.props.iter().map(|p| p.into()).collect(),
+			commit: (&val.commit).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendAdd {
+	fn serialize(&self) -> Vec<u8> {
+		SendAdd::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendAdd> for protocol::SendAdd {
+	type Error = Error;
+
+	fn try_from(val: SendAdd) -> Result<Self, Self::Error> {
+		Ok(Self {
+			props: val
+				.props
+				.iter()
+				.map(|p| {
+					Ok(ciphertext::Ciphertext::try_from(p.clone())
+						.or(Err(Error::BadCiphertextFormat))?)
+				})
+				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
+			commit: protocol::SendCommit::try_from(val.commit)
+				.or(Err(Error::BadSendCommitFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendAdd {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendAdd::decode(buf).or(Err(Error::BadSendAddFormat))?)
+	}
+}
+
+// SendInvite
+impl From<&protocol::SendInvite> for SendInvite {
+	fn from(val: &protocol::SendInvite) -> Self {
+		Self {
+			wcti: (&val.wcti).into(),
+			wctds: val.wctds.iter().map(|w| w.into()).collect(),
+			add: val.add.as_ref().map(|a| a.into()),
+		}
+	}
+}
+
+impl Serializable for protocol::SendInvite {
+	fn serialize(&self) -> Vec<u8> {
+		SendInvite::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendInvite> for protocol::SendInvite {
+	type Error = Error;
+
+	fn try_from(val: SendInvite) -> Result<Self, Self::Error> {
+		Ok(Self {
+			wcti: val.wcti.try_into().or(Err(Error::BadWlcmCtiFormat))?,
+			wctds: val
+				.wctds
+				.iter()
+				.map(|ctd| {
+					Ok(welcome::WlcmCtd::try_from(ctd.clone()).or(Err(Error::BadWlcmCtdFormat))?)
+				})
+				.collect::<Result<Vec<welcome::WlcmCtd>, Error>>()?,
+			add: val.add.map(|a| protocol::SendAdd::try_from(a)).transpose()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendInvite {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendInvite::decode(buf).or(Err(Error::BadSendInviteFormat))?)
+	}
+}
+
 // ContentType; TODO: remove?
 
 impl From<&ciphertext::ContentType> for ContentType {
@@ -723,7 +769,7 @@ impl From<&ciphertext::ContentType> for ContentType {
 		use ContentType as Pct;
 
 		match val {
-			Cct::App => Pct::App,
+			Cct::Msg => Pct::App,
 			Cct::Propose => Pct::Propsl,
 			Cct::Commit => Pct::Commt,
 		}
@@ -736,7 +782,7 @@ impl From<ContentType> for ciphertext::ContentType {
 		use ContentType as Pct;
 
 		match val {
-			Pct::App => Cct::App,
+			Pct::App => Cct::Msg,
 			Pct::Propsl => Cct::Propose,
 			Pct::Commt => Cct::Commit,
 		}
@@ -1013,7 +1059,95 @@ mod tests {
 	}
 
 	#[test]
-	fn test_send_welcome() {
+	fn test_send_add() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = protocol::SendCommit {
+			cti,
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let prop = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sa = protocol::SendAdd {
+			props: vec![prop],
+			commit: sc,
+		};
+		let serialized = sa.serialize();
+		let deserialized = protocol::SendAdd::deserialize(&serialized);
+
+		assert_eq!(Ok(sa), deserialized);
+	}
+
+	#[test]
+	fn test_send_invite() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = protocol::SendCommit {
+			cti,
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let prop = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sa = protocol::SendAdd {
+			props: vec![prop],
+			commit: sc,
+		};
 		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
 			vec![45u8; 56],
@@ -1021,26 +1155,17 @@ mod tests {
 			[123u8; 704],
 		);
 		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
-		let sw = protocol::SendWelcome {
-			cti: wcti,
-			ctds: vec![
-				welcome::WlcmCtd::new(
-					nid::Nid::new(b"abcdefgh", 1),
-					id::Id([22u8; 32]),
-					hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]),
-				),
-				welcome::WlcmCtd::new(
-					nid::Nid::new(b"dhdsjdsj", 1),
-					id::Id([42u8; 32]),
-					hpkencrypt::CmpdCtd::new([51u8; 48], vec![8, 9, 0]),
-				),
-			],
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
+		let si = protocol::SendInvite {
+			wcti,
+			wctds: vec![wctd],
+			add: Some(sa),
 		};
+		let serialized = si.serialize();
+		let deserialized = protocol::SendInvite::deserialize(&serialized);
 
-		let serialized = sw.serialize();
-		let deserialized = protocol::SendWelcome::deserialize(&serialized);
-
-		assert_eq!(Ok(sw), deserialized);
+		assert_eq!(Ok(si), deserialized);
 	}
 
 	#[test]

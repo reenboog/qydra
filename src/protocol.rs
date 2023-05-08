@@ -72,16 +72,29 @@ impl From<group::Error> for Error {
 	}
 }
 
-#[derive(PartialEq, Debug)]
-pub struct SendWelcome {
-	pub cti: WlcmCti,
-	pub ctds: Vec<WlcmCtd>,
-}
+// #[derive(PartialEq, Debug)]
+// pub struct SendWelcome {
+// 	pub cti: WlcmCti,
+// 	pub ctds: Vec<WlcmCtd>,
+// }
 
 #[derive(PartialEq, Debug)]
 pub struct SendCommit {
 	pub cti: Ciphertext,
 	pub ctds: Vec<CommitCtd>,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct SendAdd {
+	pub props: Vec<Ciphertext>,
+	pub commit: SendCommit,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct SendInvite {
+	pub wcti: WlcmCti,
+	pub wctds: Vec<WlcmCtd>,
+	pub add: Option<SendAdd>,
 }
 
 #[derive(Debug, PartialEq)]
