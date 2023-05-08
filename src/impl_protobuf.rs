@@ -47,6 +47,7 @@ pub enum Error {
 	WrongKeyPackageIdSize,
 	BadSendAddFormat,
 	BadSendInviteFormat,
+	BadSendRemoveFormat,
 }
 
 // KeyPackage
@@ -745,7 +746,10 @@ impl TryFrom<SendInvite> for protocol::SendInvite {
 					Ok(welcome::WlcmCtd::try_from(ctd.clone()).or(Err(Error::BadWlcmCtdFormat))?)
 				})
 				.collect::<Result<Vec<welcome::WlcmCtd>, Error>>()?,
-			add: val.add.map(|a| protocol::SendAdd::try_from(a)).transpose()?,
+			add: val
+				.add
+				.map(|a| protocol::SendAdd::try_from(a))
+				.transpose()?,
 		})
 	}
 }
@@ -761,6 +765,51 @@ impl Deserializable for protocol::SendInvite {
 	}
 }
 
+// SendRemove
+impl From<&protocol::SendRemove> for SendRemove {
+	fn from(val: &protocol::SendRemove) -> Self {
+		Self {
+			props: val.props.iter().map(|p| p.into()).collect(),
+			commit: (&val.commit).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendRemove {
+	fn serialize(&self) -> Vec<u8> {
+		SendRemove::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendRemove> for protocol::SendRemove {
+	type Error = Error;
+
+	fn try_from(val: SendRemove) -> Result<Self, Self::Error> {
+		Ok(Self {
+			props: val
+				.props
+				.iter()
+				.map(|p| {
+					Ok(ciphertext::Ciphertext::try_from(p.clone())
+						.or(Err(Error::BadCiphertextFormat))?)
+				})
+				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
+			commit: protocol::SendCommit::try_from(val.commit)
+				.or(Err(Error::BadSendCommitFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendRemove {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendRemove::decode(buf).or(Err(Error::BadSendRemoveFormat))?)
+	}
+}
 // ContentType; TODO: remove?
 
 impl From<&ciphertext::ContentType> for ContentType {
@@ -1104,6 +1153,54 @@ mod tests {
 		let deserialized = protocol::SendAdd::deserialize(&serialized);
 
 		assert_eq!(Ok(sa), deserialized);
+	}
+
+	#[test]
+	fn test_send_remove() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = protocol::SendCommit {
+			cti,
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let prop = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sr = protocol::SendRemove {
+			props: vec![prop],
+			commit: sc,
+		};
+		let serialized = sr.serialize();
+		let deserialized = protocol::SendRemove::deserialize(&serialized);
+
+		assert_eq!(Ok(sr), deserialized);
 	}
 
 	#[test]
