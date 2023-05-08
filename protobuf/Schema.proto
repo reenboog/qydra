@@ -45,7 +45,6 @@ message Prop {
 
 	oneof variant {
 		// option (validate.required) = true;
-
 		Remove remove = 1;
 		Update update = 2;
 		Add add = 3;
@@ -150,8 +149,8 @@ message SendProposal {
 }
 
 message SendMsg {
-	repeated bytes recipients = 1;
-	required Ciphertext payload = 2;
+	required Ciphertext payload = 1;
+	repeated bytes recipients = 2;
 }
 
 message SendAdd {

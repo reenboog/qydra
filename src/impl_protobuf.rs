@@ -37,17 +37,19 @@ pub enum Error {
 	BadCtdFormat,
 	BadWlcmCtiFormat,
 	BadWlcmCtdFormat,
-	BadSendWelcomeFormat,
 	BadCommitFormat,
 	BadFramedCommitFormat,
 	BadCommitCtdFormat,
-	BadSendCommitFormat,
 	UnknownContentType,
 	BadCiphertextFormat,
 	WrongKeyPackageIdSize,
+	BadSendCommitFormat,
 	BadSendAddFormat,
 	BadSendInviteFormat,
 	BadSendRemoveFormat,
+	BadSendProposalFormat,
+	BadSendMsgFormat,
+	BadSendFormat,
 }
 
 // KeyPackage
@@ -810,6 +812,61 @@ impl Deserializable for protocol::SendRemove {
 		Self::try_from(SendRemove::decode(buf).or(Err(Error::BadSendRemoveFormat))?)
 	}
 }
+
+// SendProposal
+impl From<&protocol::SendProposal> for SendProposal {
+	fn from(val: &protocol::SendProposal) -> Self {
+		Self {
+			props: val.props.iter().map(|p| p.into()).collect(),
+			recipients: val
+				.recipients
+				.iter()
+				.map(|nid| nid.as_bytes().to_vec())
+				.collect(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendProposal {
+	fn serialize(&self) -> Vec<u8> {
+		SendProposal::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendProposal> for protocol::SendProposal {
+	type Error = Error;
+
+	fn try_from(val: SendProposal) -> Result<Self, Self::Error> {
+		// FIXME: should I just filter failed instead?
+		Ok(Self {
+			props: val
+				.props
+				.iter()
+				.map(|p| {
+					Ok(ciphertext::Ciphertext::try_from(p.clone())
+						.or(Err(Error::BadCiphertextFormat))?)
+				})
+				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
+			recipients: val
+				.recipients
+				.iter()
+				.map(|nid| Ok(nid::Nid::try_from(nid.clone()).or(Err(Error::WrongIdSize))?))
+				.collect::<Result<Vec<nid::Nid>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendProposal {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendProposal::decode(buf).or(Err(Error::BadSendProposalFormat))?)
+	}
+}
+
 // ContentType; TODO: remove?
 
 impl From<&ciphertext::ContentType> for ContentType {
@@ -913,8 +970,6 @@ impl Deserializable for ciphertext::Ciphertext {
 		Self::try_from(Ciphertext::decode(buf).or(Err(Error::BadCiphertextFormat))?)
 	}
 }
-
-// Send
 
 #[cfg(test)]
 mod tests {
@@ -1263,6 +1318,31 @@ mod tests {
 		let deserialized = protocol::SendInvite::deserialize(&serialized);
 
 		assert_eq!(Ok(si), deserialized);
+	}
+
+	#[test]
+	fn test_send_proposal() {
+		let prop = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sa = protocol::SendProposal {
+			props: vec![prop],
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+		let serialized = sa.serialize();
+		let deserialized = protocol::SendProposal::deserialize(&serialized);
+
+		assert_eq!(Ok(sa), deserialized);
 	}
 
 	#[test]
