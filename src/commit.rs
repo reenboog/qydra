@@ -1,7 +1,7 @@
 use crate::{
 	dilithium::Signature,
 	group::Group,
-	hash::{Hash, Hashable},
+	hash::Hashable,
 	hmac, hpkencrypt,
 	id::{Id, Identifiable},
 	key_package::KeyPackage,
@@ -25,6 +25,19 @@ pub struct Commit {
 	pub cti: hpkencrypt::CmpdCti,
 	// proposal ids; order is important, so should be pre-sorted/validated
 	pub prop_ids: Vec<Id>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommitCtd {
+	pub user_id: Nid,
+	// ctd can be nil in case user_id is removed
+	pub ctd: Option<hpkencrypt::CmpdCtd>,
+}
+
+impl CommitCtd {
+	pub fn new(user_id: Nid, ctd: Option<hpkencrypt::CmpdCtd>) -> Self {
+		Self { user_id, ctd }
+	}
 }
 
 impl Hashable for Commit {

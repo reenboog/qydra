@@ -24,15 +24,15 @@ impl WlcmCti {
 #[derive(Clone, PartialEq, Debug)]
 pub struct WlcmCtd {
 	pub user_id: Nid,
-	pub key_id: Id,
+	pub kp_id: Id,
 	pub ctd: hpkencrypt::CmpdCtd,
 }
 
 impl WlcmCtd {
-	pub fn new(user_id: Nid, key_id: Id, ctd: hpkencrypt::CmpdCtd) -> Self {
+	pub fn new(user_id: Nid, kp_id: Id, ctd: hpkencrypt::CmpdCtd) -> Self {
 		Self {
 			user_id,
-			key_id,
+			kp_id,
 			ctd,
 		}
 	}

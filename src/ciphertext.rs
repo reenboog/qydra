@@ -1,4 +1,4 @@
-use crate::{aes_gcm, dilithium, hash::Hash, hmac, id::Id, nid::Nid, reuse_guard};
+use crate::{aes_gcm, dilithium, hmac, id::Id, nid::Nid, reuse_guard};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -7,7 +7,7 @@ pub enum Error {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentType {
-	App,
+	Msg,
 	Propose,
 	Commit,
 }

@@ -82,8 +82,14 @@ pub fn ilum_decrypt(
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmpdCtd {
-	ilum_ctd: ilum::Ctd,
-	ecc_ctd: EccCtd,
+	pub ilum_ctd: ilum::Ctd,
+	pub ecc_ctd: EccCtd,
+}
+
+impl CmpdCtd {
+	pub fn new(ilum_ctd: ilum::Ctd, ecc_ctd: EccCtd) -> Self {
+		Self { ilum_ctd, ecc_ctd }
+	}
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -201,6 +207,7 @@ pub fn decrypt(
 	ecc_decrypt(&cti.ct, &ctd.ecc_ctd, ecc_sk, &eph_key)
 }
 
+// TODO: can this be of a fixed size instead?
 type EccCtd = Vec<u8>;
 
 pub struct EccEncrypted {

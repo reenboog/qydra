@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-// use ilum::*;
 use rand::Rng;
 
 use crate::ciphertext::{Ciphertext, ContentType};
-use crate::commit::{Commit, FramedCommit, PendingCommit};
+use crate::commit::{Commit, CommitCtd, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
 use crate::id::{Id, Identifiable};
@@ -117,6 +116,18 @@ pub struct Owner {
 }
 
 impl Group {
+	pub fn uid(&self) -> Id {
+		self.uid
+	}
+
+	pub fn epoch(&self) -> u64 {
+		self.epoch
+	}
+
+	pub fn roster(&self) -> &Roster {
+		&self.roster
+	}
+
 	// generates a group owned by owner; recipients should use a different initializer!
 	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
 		let roster = Roster::from(Member::new(owner.id, owner.kp));
@@ -437,8 +448,8 @@ impl Group {
 		(
 			FramedCommit,
 			Ciphertext,
-			Vec<(Nid, Option<hpkencrypt::CmpdCtd>)>,
-			Option<(WlcmCti, Vec<WlcmCtd>)>,
+			Vec<CommitCtd>,
+			Option<(WlcmCti, Vec<WlcmCtd>)>, // TODO: use SendWlcm instead?
 		),
 		Error,
 	> {
@@ -509,7 +520,7 @@ impl Group {
 				// n: [a, c, e]
 				// in either case, keys never change, plus, to_notify is as ordered as encryption.ctds
 				// TODO: make such bond stronger
-				(
+				CommitCtd::new(
 					id.clone(),
 					if let Some(idx) = to_notify.iter().position(|m| m.id == *id) {
 						Some(encryption.ctds[idx].clone())
@@ -518,7 +529,7 @@ impl Group {
 					},
 				)
 			})
-			.collect::<Vec<(Nid, Option<hpkencrypt::CmpdCtd>)>>();
+			.collect::<Vec<CommitCtd>>();
 
 		let welcomes = new.welcome(&to_welcome, &joiner_secret, &conf_tag);
 
@@ -665,7 +676,7 @@ impl Group {
 	}
 
 	// include the used keys as well?
-	// kp, dk & ssk should be fetched from a local storage by wd.key_id
+	// kp, dk & ssk should be fetched from a local storage by wd.kp_id
 	pub fn join(
 		id: &Nid,
 		kp: &KeyPackage,
@@ -965,7 +976,10 @@ impl Group {
 #[cfg(test)]
 mod tests {
 	use super::{Error, Group, Owner};
-	use crate::{dilithium, key_package::KeyPackage, nid::Nid, proposal::FramedProposal, x448, commit::FramedCommit};
+	use crate::{
+		commit::FramedCommit, dilithium, key_package::KeyPackage, nid::Nid,
+		proposal::FramedProposal, x448,
+	};
 
 	#[test]
 	fn test_next() {
@@ -1020,7 +1034,9 @@ mod tests {
 			&bob_user_skp.public,
 			&bob_user_skp.private,
 		);
-		let (add_bob_prop, _) = alice_group.propose_add(bob_user_id, bob_user_kp.clone()).unwrap();
+		let (add_bob_prop, _) = alice_group
+			.propose_add(bob_user_id, bob_user_kp.clone())
+			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		// alice invites using her initial group
 		let (fc, _, ctds, wlcms) = alice_group
@@ -1031,7 +1047,7 @@ mod tests {
 		let mut alice_group = alice_group
 			.process(
 				&fc,
-				ctds.first().unwrap().1.as_ref(),
+				ctds.first().unwrap().ctd.as_ref(),
 				&[add_bob_prop, update_alice_prop],
 			)
 			.unwrap()
@@ -1097,7 +1113,7 @@ mod tests {
 		let mut alice_group = alice_group
 			.process(
 				&fc,
-				ctds.get(0).unwrap().1.as_ref(),
+				ctds.get(0).unwrap().ctd.as_ref(),
 				&[
 					add_charlie_prop.clone(),
 					update_alice_prop.clone(),
@@ -1110,7 +1126,7 @@ mod tests {
 		let mut bob_group = bob_group
 			.process(
 				&fc,
-				ctds.get(1).unwrap().1.as_ref(),
+				ctds.get(1).unwrap().ctd.as_ref(),
 				&[update_bob_prop, add_charlie_prop, update_alice_prop],
 			)
 			.unwrap()
@@ -1174,7 +1190,7 @@ mod tests {
 		let alice_group = alice_group
 			.process(
 				&fc,
-				ctds.get(0).unwrap().1.as_ref(),
+				ctds.get(0).unwrap().ctd.as_ref(),
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop.clone(),
@@ -1189,7 +1205,7 @@ mod tests {
 		let bob_group = bob_group
 			.process(
 				&fc,
-				ctds.get(1).unwrap().1.as_ref(),
+				ctds.get(1).unwrap().ctd.as_ref(),
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop.clone(),
@@ -1205,7 +1221,7 @@ mod tests {
 		let charlie_group = charlie_group
 			.process(
 				&decrypted_fc,
-				ctds.get(2).unwrap().1.as_ref(),
+				ctds.get(2).unwrap().ctd.as_ref(),
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop,
@@ -1275,7 +1291,7 @@ mod tests {
 
 		// and get alice_group
 		let mut alice_group = alice_group
-			.process(&fc, ctds.get(0).unwrap().1.as_ref(), &[add_bob_prop])
+			.process(&fc, ctds.get(0).unwrap().ctd.as_ref(), &[add_bob_prop])
 			.unwrap()
 			.unwrap();
 

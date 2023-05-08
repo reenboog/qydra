@@ -867,6 +867,52 @@ impl Deserializable for protocol::SendProposal {
 	}
 }
 
+// SendMsg
+impl From<&protocol::SendMsg> for SendMsg {
+	fn from(val: &protocol::SendMsg) -> Self {
+		Self {
+			payload: (&val.payload).into(),
+			recipients: val
+				.recipients
+				.iter()
+				.map(|nid| nid.as_bytes().to_vec())
+				.collect(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendMsg {
+	fn serialize(&self) -> Vec<u8> {
+		SendMsg::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendMsg> for protocol::SendMsg {
+	type Error = Error;
+
+	fn try_from(val: SendMsg) -> Result<Self, Self::Error> {
+		Ok(Self {
+			payload: ciphertext::Ciphertext::try_from(val.payload)
+				.or(Err(Error::BadCiphertextFormat))?,
+			recipients: val
+				.recipients
+				.iter()
+				.map(|nid| Ok(nid::Nid::try_from(nid.clone()).or(Err(Error::WrongIdSize))?))
+				.collect::<Result<Vec<nid::Nid>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendMsg {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendMsg::decode(buf).or(Err(Error::BadSendMsgFormat))?)
+	}
+}
 // ContentType; TODO: remove?
 
 impl From<&ciphertext::ContentType> for ContentType {
@@ -1343,6 +1389,31 @@ mod tests {
 		let deserialized = protocol::SendProposal::deserialize(&serialized);
 
 		assert_eq!(Ok(sa), deserialized);
+	}
+	
+	#[test]
+	fn test_send_msg() {
+		let ct = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sm = protocol::SendMsg {
+			payload: ct,
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+		let serialized = sm.serialize();
+		let deserialized = protocol::SendMsg::deserialize(&serialized);
+
+		assert_eq!(Ok(sm), deserialized);
 	}
 
 	#[test]

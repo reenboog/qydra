@@ -34,7 +34,7 @@ impl EpochSecrets {
 		match msg_type {
 			ContentType::Propose => &mut self.hs,
 			ContentType::Commit => &mut self.hs,
-			ContentType::App => &mut self.app,
+			ContentType::Msg => &mut self.app,
 		}
 	}
 }
