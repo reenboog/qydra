@@ -47,6 +47,7 @@ use crate::{
 	commit::{CommitCtd, FramedCommit},
 	group::{self, Group, Owner},
 	hash::Hash,
+	hpkencrypt::CmpdCtd,
 	id::Id,
 	key_package::KeyPackage,
 	nid::Nid,
@@ -118,8 +119,45 @@ pub enum Send {
 	Msg(SendMsg),
 }
 
-pub struct Received {
-	//
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedWelcome {
+	pub cti: WlcmCti,
+	pub ctd: CmpdCtd,
+	pub kp_id: Id,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedCommit {
+	pub cti: Ciphertext,
+	pub ctd: CmpdCtd,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedProposal {
+	pub props: Vec<Ciphertext>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedAdd {
+	pub props: ReceivedProposal,
+	pub commit: ReceivedCommit,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedRemove {
+	pub props: ReceivedProposal,
+	pub cti: Ciphertext,
+	pub ctd: Option<CmpdCtd>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Received {
+	Welcome(ReceivedWelcome),
+	Add(ReceivedAdd),
+	Remove(ReceivedRemove),
+	Props(ReceivedProposal),
+	Commit(ReceivedCommit),
+	Msg(Ciphertext),
 }
 
 pub trait Storage {

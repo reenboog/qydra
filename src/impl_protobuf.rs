@@ -50,6 +50,12 @@ pub enum Error {
 	BadSendProposalFormat,
 	BadSendMsgFormat,
 	BadSendFormat,
+	BadReceivedWelcomeFormat,
+	BadReceivedCommitFormat,
+	BadReceivedProposalFormat,
+	BadReceivedAddFormat,
+	BadReceivedRemoveFormat,
+	BadReceivedFormat,
 }
 
 // KeyPackage
@@ -941,8 +947,8 @@ impl TryFrom<Send> for protocol::Send {
 	type Error = Error;
 
 	fn try_from(val: Send) -> Result<Self, Self::Error> {
-		use send::Variant;
 		use protocol::Send::*;
+		use send::Variant;
 
 		Ok(match val.variant.ok_or(Error::BadSendFormat)? {
 			Variant::Invite(i) => Invite(i.try_into()?),
@@ -1065,6 +1071,267 @@ impl Deserializable for ciphertext::Ciphertext {
 		Self: Sized,
 	{
 		Self::try_from(Ciphertext::decode(buf).or(Err(Error::BadCiphertextFormat))?)
+	}
+}
+
+// ReceivedWelcome
+impl From<&protocol::ReceivedWelcome> for ReceivedWelcome {
+	fn from(val: &protocol::ReceivedWelcome) -> Self {
+		Self {
+			cti: (&val.cti).into(),
+			ctd: (&val.ctd).into(),
+			kp_id: val.kp_id.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedWelcome {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedWelcome::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedWelcome> for protocol::ReceivedWelcome {
+	type Error = Error;
+
+	fn try_from(val: ReceivedWelcome) -> Result<Self, Self::Error> {
+		Ok(Self {
+			cti: val.cti.try_into().or(Err(Error::BadWlcmCtiFormat))?,
+			ctd: val.ctd.try_into().or(Err(Error::BadCtdFormat))?,
+			kp_id: id::Id(val.kp_id.try_into().or(Err(Error::WrongKeyPackageIdSize))?),
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedWelcome {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedWelcome::decode(buf).or(Err(Error::BadReceivedWelcomeFormat))?)
+	}
+}
+
+// ReceivedCommit
+impl From<&protocol::ReceivedCommit> for ReceivedCommit {
+	fn from(val: &protocol::ReceivedCommit) -> Self {
+		Self {
+			cti: (&val.cti).into(),
+			ctd: (&val.ctd).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedCommit {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedCommit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedCommit> for protocol::ReceivedCommit {
+	type Error = Error;
+
+	fn try_from(val: ReceivedCommit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			cti: val.cti.try_into().or(Err(Error::BadCtiFormat))?,
+			ctd: val.ctd.try_into().or(Err(Error::BadCtdFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedCommit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedCommit::decode(buf).or(Err(Error::BadReceivedCommitFormat))?)
+	}
+}
+
+// ReceivedProposal
+impl From<&protocol::ReceivedProposal> for ReceivedProposal {
+	fn from(val: &protocol::ReceivedProposal) -> Self {
+		Self {
+			props: val.props.iter().map(|p| p.into()).collect(),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedProposal {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedProposal::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedProposal> for protocol::ReceivedProposal {
+	type Error = Error;
+
+	fn try_from(val: ReceivedProposal) -> Result<Self, Self::Error> {
+		Ok(Self {
+			props: val
+				.props
+				.iter()
+				.map(|p| {
+					Ok(ciphertext::Ciphertext::try_from(p.clone())
+						.or(Err(Error::BadCiphertextFormat))?)
+				})
+				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedProposal {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedProposal::decode(buf).or(Err(Error::BadReceivedProposalFormat))?)
+	}
+}
+
+// ReceivedAdd
+impl From<&protocol::ReceivedAdd> for ReceivedAdd {
+	fn from(val: &protocol::ReceivedAdd) -> Self {
+		Self {
+			props: (&val.props).into(),
+			commit: (&val.commit).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedAdd {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedAdd::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedAdd> for protocol::ReceivedAdd {
+	type Error = Error;
+
+	fn try_from(val: ReceivedAdd) -> Result<Self, Self::Error> {
+		Ok(Self {
+			props: val
+				.props
+				.try_into()
+				.or(Err(Error::BadReceivedProposalFormat))?,
+			commit: val
+				.commit
+				.try_into()
+				.or(Err(Error::BadReceivedCommitFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedAdd {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedAdd::decode(buf).or(Err(Error::BadReceivedAddFormat))?)
+	}
+}
+
+// ReceivedRemove
+impl From<&protocol::ReceivedRemove> for ReceivedRemove {
+	fn from(val: &protocol::ReceivedRemove) -> Self {
+		Self {
+			props: (&val.props).into(),
+			cti: (&val.cti).into(),
+			ctd: val.ctd.as_ref().map(|ctd| ctd.into()),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedRemove {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedRemove::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedRemove> for protocol::ReceivedRemove {
+	type Error = Error;
+
+	fn try_from(val: ReceivedRemove) -> Result<Self, Self::Error> {
+		Ok(Self {
+			props: val
+				.props
+				.try_into()
+				.or(Err(Error::BadReceivedProposalFormat))?,
+			cti: val.cti.try_into().or(Err(Error::BadCiphertextFormat))?,
+			ctd: val.ctd.map(|ctd| ctd.try_into()).transpose()?,
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedRemove {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedRemove::decode(buf).or(Err(Error::BadReceivedRemoveFormat))?)
+	}
+}
+
+// Received
+impl From<&protocol::Received> for Received {
+	fn from(val: &protocol::Received) -> Self {
+		use received::Variant;
+
+		Self {
+			variant: Some(match val {
+				protocol::Received::Welcome(w) => Variant::Wlcm(w.into()),
+				protocol::Received::Add(a) => Variant::Add(a.into()),
+				protocol::Received::Remove(r) => Variant::Remove(r.into()),
+				protocol::Received::Props(p) => Variant::Props(p.into()),
+				protocol::Received::Commit(c) => Variant::Commit(c.into()),
+				protocol::Received::Msg(m) => Variant::Msg(m.into()),
+			}),
+		}
+	}
+}
+
+impl Serializable for protocol::Received {
+	fn serialize(&self) -> Vec<u8> {
+		Received::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Received> for protocol::Received {
+	type Error = Error;
+
+	fn try_from(val: Received) -> Result<Self, Self::Error> {
+		use protocol::Received::*;
+		use received::Variant;
+
+		Ok(match val.variant.ok_or(Error::BadReceivedFormat)? {
+			Variant::Wlcm(w) => Welcome(w.try_into()?),
+			Variant::Add(a) => Add(a.try_into()?),
+			Variant::Remove(r) => Remove(r.try_into()?),
+			Variant::Props(p) => Props(p.try_into()?),
+			Variant::Commit(c) => Commit(c.try_into()?),
+			Variant::Msg(m) => Msg(m.try_into()?),
+		})
+	}
+}
+
+impl Deserializable for protocol::Received {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Received::decode(buf).or(Err(Error::BadReceivedFormat))?)
 	}
 }
 
@@ -1441,7 +1708,7 @@ mod tests {
 
 		assert_eq!(Ok(sp), deserialized);
 	}
-	
+
 	#[test]
 	fn test_send_msg() {
 		let ct = ciphertext::Ciphertext {
@@ -1528,7 +1795,7 @@ mod tests {
 		let deserialized = protocol::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
-		
+
 		let sr = protocol::SendRemove {
 			props: vec![prop.clone()],
 			commit: sc,
@@ -1539,7 +1806,7 @@ mod tests {
 		let deserialized = protocol::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
-		
+
 		let sp = protocol::SendProposal {
 			props: vec![prop],
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
@@ -1684,6 +1951,284 @@ mod tests {
 		let deserialized = protocol::SendCommit::deserialize(&serialized);
 
 		assert_eq!(Ok(sc), deserialized);
+	}
+
+	#[test]
+	fn test_received_wlcm() {
+		let cti = hpkencrypt::CmpdCti::new(
+			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
+		);
+		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let wlcm = protocol::ReceivedWelcome {
+			cti,
+			ctd,
+			kp_id: id::Id([88u8; 32]),
+		};
+		let serialized = wlcm.serialize();
+		let deserialized = protocol::ReceivedWelcome::deserialize(&serialized);
+
+		assert_eq!(Ok(wlcm), deserialized);
+	}
+
+	#[test]
+	fn test_received_commit() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rc = protocol::ReceivedCommit { cti, ctd };
+		let serialized = rc.serialize();
+		let deserialized = protocol::ReceivedCommit::deserialize(&serialized);
+
+		assert_eq!(Ok(rc), deserialized);
+	}
+
+	#[test]
+	fn test_received_prop() {
+		let ct0 = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ct1 = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([23u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
+			guid: id::Id([78u8; 32]),
+			epoch: 102,
+			gen: 2023,
+			sender: nid::Nid::new(b"abcdef00", 9),
+			iv: aes_gcm::Iv([98u8; 12]),
+			sig: dilithium::Signature::new([30u8; 4595]),
+			mac: hmac::Digest([71u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let rp = protocol::ReceivedProposal {
+			props: vec![ct0, ct1],
+		};
+		let serialized = rp.serialize();
+		let deserialized = protocol::ReceivedProposal::deserialize(&serialized);
+
+		assert_eq!(Ok(rp), deserialized);
+	}
+
+	#[test]
+	fn test_received_add() {
+		let ct = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([23u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
+			guid: id::Id([78u8; 32]),
+			epoch: 102,
+			gen: 2023,
+			sender: nid::Nid::new(b"abcdef00", 9),
+			iv: aes_gcm::Iv([98u8; 12]),
+			sig: dilithium::Signature::new([30u8; 4595]),
+			mac: hmac::Digest([71u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let rp = protocol::ReceivedProposal { props: vec![ct] };
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 66, 77, 88, 99, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rc = protocol::ReceivedCommit { cti, ctd };
+		let ra = protocol::ReceivedAdd {
+			props: rp,
+			commit: rc,
+		};
+		let serialized = ra.serialize();
+		let deserialized = protocol::ReceivedAdd::deserialize(&serialized);
+
+		assert_eq!(Ok(ra), deserialized);
+	}
+
+	#[test]
+	fn test_received_remove() {
+		let ct = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([23u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
+			guid: id::Id([78u8; 32]),
+			epoch: 102,
+			gen: 2023,
+			sender: nid::Nid::new(b"abcdef00", 9),
+			iv: aes_gcm::Iv([98u8; 12]),
+			sig: dilithium::Signature::new([30u8; 4595]),
+			mac: hmac::Digest([71u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let rp = protocol::ReceivedProposal { props: vec![ct] };
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rr = protocol::ReceivedRemove {
+			props: rp.clone(),
+			cti: cti.clone(),
+			ctd: Some(ctd),
+		};
+		let serialized = rr.serialize();
+		let deserialized = protocol::ReceivedRemove::deserialize(&serialized);
+
+		assert_eq!(Ok(rr), deserialized);
+
+		let rr = protocol::ReceivedRemove {
+			props: rp,
+			cti,
+			ctd: None,
+		};
+		let serialized = rr.serialize();
+		let deserialized = protocol::ReceivedRemove::deserialize(&serialized);
+
+		assert_eq!(Ok(rr), deserialized);
+	}
+
+	#[test]
+	fn test_received() {
+		let cti = hpkencrypt::CmpdCti::new(
+			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
+		);
+		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let wlcm = protocol::ReceivedWelcome {
+			cti,
+			ctd,
+			kp_id: id::Id([88u8; 32]),
+		};
+		let rcvd = protocol::Received::Welcome(wlcm);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
+
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rc = protocol::ReceivedCommit {
+			cti: cti.clone(),
+			ctd,
+		};
+		let rcvd = protocol::Received::Commit(rc);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
+
+		let rp = protocol::ReceivedProposal {
+			props: vec![cti.clone()],
+		};
+		let rcvd = protocol::Received::Props(rp);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
+
+		let ct = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([23u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
+			guid: id::Id([78u8; 32]),
+			epoch: 102,
+			gen: 2023,
+			sender: nid::Nid::new(b"abcdef00", 9),
+			iv: aes_gcm::Iv([98u8; 12]),
+			sig: dilithium::Signature::new([30u8; 4595]),
+			mac: hmac::Digest([71u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let rp = protocol::ReceivedProposal {
+			props: vec![ct.clone()],
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rc = protocol::ReceivedCommit {
+			cti: cti.clone(),
+			ctd: ctd.clone(),
+		};
+		let ra = protocol::ReceivedAdd {
+			props: rp.clone(),
+			commit: rc,
+		};
+
+		let rcvd = protocol::Received::Add(ra);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
+
+		let rr = protocol::ReceivedRemove {
+			props: rp,
+			cti: cti.clone(),
+			ctd: Some(ctd),
+		};
+
+		let rcvd = protocol::Received::Remove(rr);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
+
+		let rcvd = protocol::Received::Msg(ct);
+		let serialized = rcvd.serialize();
+		let deserialized = protocol::Received::deserialize(&serialized);
+
+		assert_eq!(Ok(rcvd), deserialized);
 	}
 
 	#[test]
