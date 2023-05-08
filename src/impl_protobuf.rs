@@ -313,16 +313,16 @@ impl From<&proposal::Proposal> for Prop {
 		use proposal::Proposal::*;
 
 		Self {
-			variant: match val {
-				Remove { id } => Some(Variant::Remove(prop::Remove {
+			variant: Some(match val {
+				Remove { id } => Variant::Remove(prop::Remove {
 					id: id.as_bytes().to_vec(),
-				})),
-				Update { kp } => Some(Variant::Update(prop::Update { kp: kp.into() })),
-				Add { id, kp } => Some(Variant::Add(prop::Add {
+				}),
+				Update { kp } => Variant::Update(prop::Update { kp: kp.into() }),
+				Add { id, kp } => Variant::Add(prop::Add {
 					id: id.as_bytes().to_vec(),
 					kp: kp.into(),
-				})),
-			},
+				}),
+			}),
 		}
 	}
 }
@@ -913,6 +913,57 @@ impl Deserializable for protocol::SendMsg {
 		Self::try_from(SendMsg::decode(buf).or(Err(Error::BadSendMsgFormat))?)
 	}
 }
+
+// Send
+impl From<&protocol::Send> for Send {
+	fn from(val: &protocol::Send) -> Self {
+		use send::Variant;
+
+		Self {
+			variant: Some(match val {
+				protocol::Send::Invite(i) => Variant::Invite(SendInvite::from(i)),
+				protocol::Send::Remove(r) => Variant::Remove(SendRemove::from(r)),
+				protocol::Send::Props(p) => Variant::Props(SendProposal::from(p)),
+				protocol::Send::Commit(c) => Variant::Commit(SendCommit::from(c)),
+				protocol::Send::Msg(m) => Variant::Msg(SendMsg::from(m)),
+			}),
+		}
+	}
+}
+
+impl Serializable for protocol::Send {
+	fn serialize(&self) -> Vec<u8> {
+		Send::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Send> for protocol::Send {
+	type Error = Error;
+
+	fn try_from(val: Send) -> Result<Self, Self::Error> {
+		use send::Variant;
+		use protocol::Send::*;
+
+		Ok(match val.variant.ok_or(Error::BadSendFormat)? {
+			Variant::Invite(i) => Invite(i.try_into()?),
+			Variant::Remove(r) => Remove(r.try_into()?),
+			Variant::Props(p) => Props(p.try_into()?),
+			Variant::Commit(c) => Commit(c.try_into()?),
+			Variant::Msg(m) => Msg(m.try_into()?),
+		})
+	}
+}
+
+impl Deserializable for protocol::Send {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Send::decode(buf).or(Err(Error::BadSendFormat))?)
+	}
+}
 // ContentType; TODO: remove?
 
 impl From<&ciphertext::ContentType> for ContentType {
@@ -1381,14 +1432,14 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sa = protocol::SendProposal {
+		let sp = protocol::SendProposal {
 			props: vec![prop],
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
-		let serialized = sa.serialize();
+		let serialized = sp.serialize();
 		let deserialized = protocol::SendProposal::deserialize(&serialized);
 
-		assert_eq!(Ok(sa), deserialized);
+		assert_eq!(Ok(sp), deserialized);
 	}
 	
 	#[test]
@@ -1414,6 +1465,119 @@ mod tests {
 		let deserialized = protocol::SendMsg::deserialize(&serialized);
 
 		assert_eq!(Ok(sm), deserialized);
+	}
+
+	#[test]
+	fn test_send() {
+		let cti = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = protocol::SendCommit {
+			cti: cti.clone(),
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let prop = ciphertext::Ciphertext {
+			content_type: ciphertext::ContentType::Propose,
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sa = protocol::SendAdd {
+			props: vec![prop.clone()],
+			commit: sc.clone(),
+		};
+		let cmpd_cti = hpkencrypt::CmpdCti::new(
+			vec![1, 2, 3, 4, 5, 6, 7],
+			vec![45u8; 56],
+			aes_gcm::Iv([45u8; 12]),
+			[123u8; 704],
+		);
+		let wcti = welcome::WlcmCti::new(cmpd_cti, dilithium::Signature::new([57u8; 4595]));
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
+		let si = protocol::SendInvite {
+			wcti,
+			wctds: vec![wctd],
+			add: Some(sa),
+		};
+		let send = protocol::Send::Invite(si);
+		let serialied = send.serialize();
+		let deserialized = protocol::Send::deserialize(&serialied);
+
+		assert_eq!(Ok(send), deserialized);
+		
+		let sr = protocol::SendRemove {
+			props: vec![prop.clone()],
+			commit: sc,
+		};
+
+		let send = protocol::Send::Remove(sr);
+		let serialied = send.serialize();
+		let deserialized = protocol::Send::deserialize(&serialied);
+
+		assert_eq!(Ok(send), deserialized);
+		
+		let sp = protocol::SendProposal {
+			props: vec![prop],
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+
+		let send = protocol::Send::Props(sp);
+		let serialied = send.serialize();
+		let deserialized = protocol::Send::deserialize(&serialied);
+
+		assert_eq!(Ok(send), deserialized);
+
+		let sc = protocol::SendCommit {
+			cti: cti.clone(),
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+
+		let send = protocol::Send::Commit(sc);
+		let serialied = send.serialize();
+		let deserialized = protocol::Send::deserialize(&serialied);
+
+		assert_eq!(Ok(send), deserialized);
+
+		let sm = protocol::SendMsg {
+			payload: cti,
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+
+		let send = protocol::Send::Msg(sm);
+		let serialied = send.serialize();
+		let deserialized = protocol::Send::deserialize(&serialied);
+
+		assert_eq!(Ok(send), deserialized);
 	}
 
 	#[test]

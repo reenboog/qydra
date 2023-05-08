@@ -72,38 +72,38 @@ impl From<group::Error> for Error {
 	}
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendCommit {
 	pub cti: Ciphertext,
 	pub ctds: Vec<CommitCtd>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendAdd {
 	pub props: Vec<Ciphertext>,
 	pub commit: SendCommit,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendInvite {
 	pub wcti: WlcmCti,
 	pub wctds: Vec<WlcmCtd>,
 	pub add: Option<SendAdd>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendRemove {
 	pub props: Vec<Ciphertext>,
 	pub commit: SendCommit,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendProposal {
 	pub props: Vec<Ciphertext>,
 	pub recipients: Vec<Nid>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendMsg {
 	pub payload: Ciphertext,
 	pub recipients: Vec<Nid>,
