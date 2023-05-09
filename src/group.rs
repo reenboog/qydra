@@ -76,7 +76,7 @@ pub enum Error {
 }
 
 // group state
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Group {
 	uid: Id,
 	epoch: u64,
@@ -108,14 +108,46 @@ pub struct Group {
 // a similar structure should be used for `me` in `Group`
 #[derive(Clone)]
 pub struct Owner {
-	id: Nid,
-	kp: KeyPackage,
-	ilum_dk: ilum::SecretKey,
-	x448_dk: x448::PrivateKey,
-	ssk: dilithium::PrivateKey,
+	pub(crate) id: Nid,
+	pub(crate) kp: KeyPackage,
+	pub(crate) ilum_dk: ilum::SecretKey,
+	pub(crate) x448_dk: x448::PrivateKey,
+	pub(crate) ssk: dilithium::PrivateKey,
 }
 
 impl Group {
+	pub fn new(
+		uid: Id,
+		epoch: u64,
+		seed: ilum::Seed,
+		conf_trans_hash: Hash,
+		interim_trans_hash: Hash,
+		roster: Roster,
+		pending_updates: HashMap<Id, PendingUpdate>,
+		pending_commits: HashMap<Id, PendingCommit>,
+		user_id: Nid,
+		ilum_dk: ilum::SecretKey,
+		x448_dk: x448::PrivateKey,
+		ssk: dilithium::PrivateKey,
+		secrets: EpochSecrets,
+	) -> Self {
+		Self {
+			uid,
+			epoch,
+			seed,
+			conf_trans_hash,
+			interim_trans_hash,
+			roster,
+			pending_updates,
+			pending_commits,
+			user_id,
+			ilum_dk,
+			x448_dk,
+			ssk,
+			secrets,
+		}
+	}
+
 	pub fn uid(&self) -> Id {
 		self.uid
 	}
@@ -124,8 +156,48 @@ impl Group {
 		self.epoch
 	}
 
+	pub fn seed(&self) -> ilum::Seed {
+		self.seed
+	}
+
 	pub fn roster(&self) -> &Roster {
 		&self.roster
+	}
+
+	pub fn conf_trans_hash(&self) -> &Hash {
+		&self.conf_trans_hash
+	}
+
+	pub fn intr_trans_hash(&self) -> &Hash {
+		&self.interim_trans_hash
+	}
+
+	pub fn pending_updates(&self) -> &HashMap<Id, PendingUpdate> {
+		&self.pending_updates
+	}
+
+	pub fn pending_commits(&self) -> &HashMap<Id, PendingCommit> {
+		&self.pending_commits
+	}
+
+	pub fn user_id(&self) -> &Nid {
+		&self.user_id
+	}
+
+	pub fn ilum_dk(&self) -> &ilum::SecretKey {
+		&self.ilum_dk
+	}
+
+	pub fn x448_dk(&self) -> &x448::PrivateKey {
+		&self.x448_dk
+	}
+
+	pub fn ssk(&self) -> &dilithium::PrivateKey {
+		&self.ssk
+	}
+
+	pub fn secrets(&self) -> &EpochSecrets {
+		&self.secrets
 	}
 
 	// generates a group owned by owner; recipients should use a different initializer!

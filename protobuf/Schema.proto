@@ -13,8 +13,8 @@ message Group {
 
 	required Roster roster = 6;
 
-	repeated PendingUpdate pending_updates = 7;
-	repeated PendingCommit pending_commits = 8;
+	repeated PendingUpdateEntry pending_updates = 7;
+	repeated PendingCommitEntry pending_commits = 8;
 
 	required bytes user_id = 9;
 	required bytes ilum_dk = 10;
@@ -50,20 +50,29 @@ message EpochSecrets {
 	required ChainTree app = 4;
 }
 
-// FIXME: introduce a wrapper type?
 message PendingCommit {
-	// required bytes id = 1;
 	// the new state
 	required Group state = 2;
 	// ids of framed proposals to ensure no proposals have been received since the commit was sent to the backend
 	repeated bytes proposals = 3;
 }
 
+// wraps PendingCommit to support ubytes keys for map
+message PendingCommitEntry {
+	required bytes id = 1;
+	required PendingCommit commit = 2;
+}
+
 message PendingUpdate {
-	// required bytes id = 1;
 	required bytes ilum_dk = 2;
 	required bytes x448_dk = 3;
 	required bytes ssk = 4;
+}
+
+// wraps PendingUpdate to support ubytes keys for map
+message PendingUpdateEntry {
+	required bytes id = 1;
+	required PendingUpdate upd = 2;
 }
 
 message KeyPackage {

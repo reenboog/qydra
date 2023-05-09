@@ -9,7 +9,7 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct PendingCommit {
 	// the new state
 	pub state: Group,

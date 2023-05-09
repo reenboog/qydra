@@ -3,8 +3,8 @@ include!(concat!(env!("OUT_DIR"), "/main.rs"));
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package,
-	key_schedule, member, nid, proposal, protocol, roster, secret_tree,
+	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hash, hpkencrypt, id,
+	key_package, key_schedule, member, nid, proposal, protocol, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
 	treemath, update, welcome,
 };
@@ -24,6 +24,7 @@ pub enum Error {
 	BadRosterFormat,
 	WrongGuidSize,
 	WrongConfTransHashSize,
+	WrongInterimTransHashSize,
 	WrongConfTagSize,
 	WrongJoinerSize,
 	BadGroupInfoFormat,
@@ -69,6 +70,8 @@ pub enum Error {
 	WrongMacKeySize,
 	BadPendingUpdateFormat,
 	BadPendingCommitFormat,
+	BadGroupFormat,
+	WrongSeedSize,
 }
 
 // Chain
@@ -311,6 +314,154 @@ impl Deserializable for update::PendingUpdate {
 		Self: Sized,
 	{
 		Self::try_from(PendingUpdate::decode(buf).or(Err(Error::BadPendingUpdateFormat))?)
+	}
+}
+
+// Group
+impl From<&group::Group> for Group {
+	fn from(val: &group::Group) -> Self {
+		Self {
+			uid: val.uid().as_bytes().to_vec(),
+			epoch: val.epoch(),
+			seed: val.seed().to_vec(),
+			conf_trans_hash: val.conf_trans_hash().to_vec(),
+			interim_trans_hash: val.intr_trans_hash().to_vec(),
+			roster: val.roster().into(),
+			pending_updates: val
+				.pending_updates()
+				.iter()
+				.map(|(k, v)| PendingUpdateEntry {
+					id: k.0.to_vec(),
+					upd: v.into(),
+				})
+				.collect(),
+			pending_commits: val
+				.pending_commits()
+				.iter()
+				.map(|(k, v)| PendingCommitEntry {
+					id: k.0.to_vec(),
+					commit: v.into(),
+				})
+				.collect(),
+			user_id: val.user_id().as_bytes().to_vec(),
+			ilum_dk: val.ilum_dk().to_vec(),
+			x448_dk: val.x448_dk().as_bytes().to_vec(),
+			ssk: val.ssk().as_bytes().to_vec(),
+			secrets: val.secrets().into(),
+		}
+	}
+}
+
+impl Serializable for group::Group {
+	fn serialize(&self) -> Vec<u8> {
+		Group::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Group> for group::Group {
+	type Error = Error;
+
+	fn try_from(val: Group) -> Result<Self, Self::Error> {
+		Ok(Self::new(
+			id::Id(val.uid.try_into().or(Err(Error::WrongGuidSize))?),
+			val.epoch,
+			val.seed.try_into().or(Err(Error::WrongSeedSize))?,
+			val.conf_trans_hash
+				.try_into()
+				.or(Err(Error::WrongConfTransHashSize))?,
+			val.interim_trans_hash
+				.try_into()
+				.or(Err(Error::WrongInterimTransHashSize))?,
+			val.roster.try_into().or(Err(Error::BadRosterFormat))?,
+			val.pending_updates
+				.iter()
+				.map(|pu| {
+					Ok((
+						id::Id(pu.id.clone().try_into().or(Err(Error::WrongIdSize))?),
+						pu.upd
+							.clone()
+							.try_into()
+							.or(Err(Error::BadPendingUpdateFormat))?,
+					))
+				})
+				.collect::<Result<HashMap<id::Id, update::PendingUpdate>, Error>>()?,
+			val.pending_commits
+				.iter()
+				.map(|pc| {
+					Ok((
+						id::Id(pc.id.clone().try_into().or(Err(Error::WrongIdSize))?),
+						pc.commit
+							.clone()
+							.try_into()
+							.or(Err(Error::BadPendingCommitFormat))?,
+					))
+				})
+				.collect::<Result<HashMap<id::Id, commit::PendingCommit>, Error>>()?,
+			val.user_id.try_into().or(Err(Error::WrongNidSize))?,
+			val.ilum_dk.try_into().or(Err(Error::WrongIlumKeySize))?,
+			val.x448_dk.try_into().or(Err(Error::WrongX448KeySize))?,
+			val.ssk.try_into().or(Err(Error::WrongDilithiumKeySize))?,
+			val.secrets
+				.try_into()
+				.or(Err(Error::BadEpochSecretsFormat))?,
+		))
+	}
+}
+
+impl Deserializable for group::Group {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Group::decode(buf).or(Err(Error::BadGroupFormat))?)
+	}
+}
+
+// PendingCommit
+impl From<&commit::PendingCommit> for PendingCommit {
+	fn from(val: &commit::PendingCommit) -> Self {
+		Self {
+			state: (&val.state).into(),
+			proposals: val
+				.proposals
+				.iter()
+				.map(|p| p.as_bytes().to_vec())
+				.collect(),
+		}
+	}
+}
+
+impl Serializable for commit::PendingCommit {
+	fn serialize(&self) -> Vec<u8> {
+		PendingCommit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<PendingCommit> for commit::PendingCommit {
+	type Error = Error;
+
+	fn try_from(val: PendingCommit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			state: val.state.try_into().or(Err(Error::BadGroupFormat))?,
+			proposals: val
+				.proposals
+				.into_iter()
+				.map(|p| Ok(id::Id(p.try_into().or(Err(Error::WrongIdSize))?)))
+				.collect::<Result<Vec<id::Id>, Error>>()?,
+		})
+	}
+}
+
+impl Deserializable for commit::PendingCommit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(PendingCommit::decode(buf).or(Err(Error::BadPendingCommitFormat))?)
 	}
 }
 
@@ -1594,7 +1745,7 @@ impl Deserializable for protocol::Received {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hmac, hpkencrypt, id,
+		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hmac, hpkencrypt, id,
 		key_package, key_schedule, member, nid, proposal, protocol, reuse_guard, roster,
 		secret_tree,
 		serializable::{Deserializable, Serializable},
@@ -1741,6 +1892,83 @@ mod tests {
 		let deserialized = update::PendingUpdate::deserialize(&serialized);
 
 		assert_eq!(Ok(pu), deserialized);
+	}
+
+	#[test]
+	fn test_group() {
+		let seed = [12u8; 16];
+		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_x448_kp = x448::KeyPair::generate();
+		let alice_skp = dilithium::KeyPair::generate();
+		let alice_id = nid::Nid::new(b"aliceali", 0);
+		let alice = group::Owner {
+			id: alice_id.clone(),
+			kp: key_package::KeyPackage::new(
+				&alice_ekp.pk,
+				&alice_x448_kp.public,
+				&alice_skp.public,
+				&alice_skp.private,
+			),
+			ilum_dk: alice_ekp.sk,
+			x448_dk: alice_x448_kp.private,
+			ssk: alice_skp.private,
+		};
+
+		let mut alice_group = group::Group::create(seed, alice);
+
+		let bob_user_id = nid::Nid::new(b"bobbobbo", 0);
+		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_x448_kp = x448::KeyPair::generate();
+		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_kp = key_package::KeyPackage::new(
+			&bob_user_ekp.pk,
+			&bob_x448_kp.public,
+			&bob_user_skp.public,
+			&bob_user_skp.private,
+		);
+		let (add_bob_prop, _) = alice_group
+			.propose_add(bob_user_id, bob_user_kp.clone())
+			.unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		// alice invites using her initial group
+		let (fc, _, ctds, _) = alice_group
+			.commit(&[add_bob_prop.clone(), update_alice_prop.clone()])
+			.unwrap();
+
+		// and get alice_group
+		let mut alice_group = alice_group
+			.process(
+				&fc,
+				ctds.first().unwrap().ctd.as_ref(),
+				&[add_bob_prop, update_alice_prop],
+			)
+			.unwrap()
+			.unwrap();
+
+		let charlie_user_id = nid::Nid::new(b"charliec", 0);
+		let charlie_user_ekp = ilum::gen_keypair(&seed);
+		let charlie_x448_kp = x448::KeyPair::generate();
+		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_kp = key_package::KeyPackage::new(
+			&charlie_user_ekp.pk,
+			&charlie_x448_kp.public,
+			&charlie_user_skp.public,
+			&charlie_user_skp.private,
+		);
+		// now alice proposes to add charlie
+		let (add_charlie_prop, _) = alice_group
+			.propose_add(charlie_user_id, charlie_user_kp.clone())
+			.unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		// commits using her alic_group
+		let _ = alice_group
+			.commit(&[add_charlie_prop.clone(), update_alice_prop.clone()])
+			.unwrap();
+
+		let serialized = alice_group.serialize();
+		let deserialized = group::Group::deserialize(&serialized);
+
+		assert_eq!(Ok(alice_group), deserialized);
 	}
 
 	#[test]
