@@ -6,7 +6,7 @@ use crate::{
 	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package,
 	member, nid, proposal, protocol, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
-	treemath, welcome,
+	treemath, welcome, key_schedule,
 };
 use prost::Message;
 
@@ -64,6 +64,9 @@ pub enum Error {
 	WrongSecretSize,
 	WrongChainTree,
 	BadChainTreeFormat,
+	BadEpochSecretsFormat,
+	WrongInitKeySize,
+	WrongMacKeySize,
 }
 
 // Chain
@@ -224,6 +227,48 @@ impl Deserializable for chain_tree::ChainTree {
 		Self: Sized,
 	{
 		Self::try_from(ChainTree::decode(buf).or(Err(Error::BadChainTreeFormat))?)
+	}
+}
+
+// EpochSecrets
+impl From<&key_schedule::EpochSecrets> for EpochSecrets {
+	fn from(val: &key_schedule::EpochSecrets) -> Self {
+		Self {
+			init: val.init.to_vec(),
+			mac: val.mac.to_vec(),
+			hs: (&val.hs).into(),
+			app: (&val.app).into(),
+		}
+	}
+}
+
+impl Serializable for key_schedule::EpochSecrets {
+	fn serialize(&self) -> Vec<u8> {
+		EpochSecrets::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<EpochSecrets> for key_schedule::EpochSecrets {
+	type Error = Error;
+
+	fn try_from(val: EpochSecrets) -> Result<Self, Self::Error> {
+		Ok(Self {
+			init: val.init.try_into().or(Err(Error::WrongInitKeySize))?,
+			mac: val.mac.try_into().or(Err(Error::WrongMacKeySize))?,
+			hs: val.hs.try_into().or(Err(Error::BadChainTreeFormat))?,
+			app: val.app.try_into().or(Err(Error::BadChainTreeFormat))?,
+		})
+	}
+}
+
+impl Deserializable for key_schedule::EpochSecrets {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(EpochSecrets::decode(buf).or(Err(Error::BadEpochSecretsFormat))?)
 	}
 }
 
@@ -1510,7 +1555,7 @@ mod tests {
 		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hmac, hpkencrypt, id,
 		key_package, member, nid, proposal, protocol, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
-		treemath, welcome, x448,
+		treemath, welcome, x448, key_schedule,
 	};
 
 	#[test]
@@ -1577,6 +1622,70 @@ mod tests {
 		let deserialized = chain_tree::ChainTree::deserialize(&serialized);
 
 		assert_eq!(Ok(ct), deserialized);
+	}
+
+	#[test]
+	fn test_epoch_secrets() {
+		let mut st = secret_tree::HkdfTree::try_new_for_root_secret(18, [42u8; 32]).unwrap();
+		// consume a few secrets to fill up the tree
+		_ = st.get(treemath::LeafIndex(3));
+		_ = st.get(treemath::LeafIndex(7));
+
+		let c0 = chain::Chain {
+			skipped_keys: vec![(2, chain::DetachedKey([12u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([78u8; 32]),
+			next_idx: 99,
+			max_keys_to_skip: 57,
+		};
+		let c1 = chain::Chain {
+			skipped_keys: vec![(1, chain::DetachedKey([33u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([66u8; 32]),
+			next_idx: 12,
+			max_keys_to_skip: 57,
+		};
+		let hs = chain_tree::ChainTree {
+			chains: vec![(treemath::LeafIndex(0), c0), (treemath::LeafIndex(1), c1)]
+				.into_iter()
+				.collect(),
+			secret_tree: st,
+			max_keys_to_skip: 57,
+		};
+		let mut st = secret_tree::HkdfTree::try_new_for_root_secret(18, [22u8; 32]).unwrap();
+		// consume a few secrets to fill up the tree
+		_ = st.get(treemath::LeafIndex(10));
+		_ = st.get(treemath::LeafIndex(1));
+		_ = st.get(treemath::LeafIndex(7));
+
+		let c0 = chain::Chain {
+			skipped_keys: vec![(2, chain::DetachedKey([77u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([28u8; 32]),
+			next_idx: 39,
+			max_keys_to_skip: 57,
+		};
+		let app = chain_tree::ChainTree {
+			chains: vec![(treemath::LeafIndex(0), c0)]
+				.into_iter()
+				.collect(),
+			secret_tree: st,
+			max_keys_to_skip: 57,
+		};
+		let es = key_schedule::EpochSecrets {
+			init: [11u8; 32],
+			mac: [33u8; 32],
+			hs,
+			app,
+		};
+		let serialized = es.serialize();
+		let deserialized = key_schedule::EpochSecrets::deserialize(&serialized);
+
+		assert_eq!(Ok(es), deserialized);
+
 	}
 
 	#[test]
