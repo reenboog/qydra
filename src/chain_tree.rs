@@ -43,9 +43,9 @@ impl From<secret_tree::Error> for Error {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChainTree {
-	chains: BTreeMap<LeafIndex, Chain>,
-	secret_tree: HkdfTree,
-	max_keys_to_skip: u32,
+	pub(crate) chains: BTreeMap<LeafIndex, Chain>,
+	pub(crate) secret_tree: HkdfTree,
+	pub(crate) max_keys_to_skip: u32,
 }
 
 impl ChainTree {

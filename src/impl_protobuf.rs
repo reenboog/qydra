@@ -3,8 +3,8 @@ include!(concat!(env!("OUT_DIR"), "/main.rs"));
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-	aes_gcm, chain, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package, member, nid,
-	proposal, protocol, roster, secret_tree,
+	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package,
+	member, nid, proposal, protocol, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
 	treemath, welcome,
 };
@@ -62,6 +62,8 @@ pub enum Error {
 	BadChainFormat,
 	BadSecretTreeFormat,
 	WrongSecretSize,
+	WrongChainTree,
+	BadChainTreeFormat,
 }
 
 // Chain
@@ -170,6 +172,58 @@ impl Deserializable for secret_tree::HkdfTree {
 		Self: Sized,
 	{
 		Self::try_from(SecretTree::decode(buf).or(Err(Error::BadSecretTreeFormat))?)
+	}
+}
+
+// ChainTree
+impl From<&chain_tree::ChainTree> for ChainTree {
+	fn from(val: &chain_tree::ChainTree) -> Self {
+		Self {
+			chains: val.chains.iter().map(|(k, v)| (k.0, v.into())).collect(),
+			secret_tree: (&val.secret_tree).into(),
+			max_keys_to_skip: val.max_keys_to_skip,
+		}
+	}
+}
+
+impl Serializable for chain_tree::ChainTree {
+	fn serialize(&self) -> Vec<u8> {
+		ChainTree::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ChainTree> for chain_tree::ChainTree {
+	type Error = Error;
+
+	fn try_from(val: ChainTree) -> Result<Self, Self::Error> {
+		Ok(Self {
+			chains: val
+				.chains
+				.iter()
+				.map(|(k, v)| {
+					Ok((
+						treemath::LeafIndex(*k),
+						v.clone().try_into().or(Err(Error::BadChainFormat))?,
+					))
+				})
+				.collect::<Result<BTreeMap<treemath::LeafIndex, chain::Chain>, Error>>()?,
+			secret_tree: val
+				.secret_tree
+				.try_into()
+				.or(Err(Error::BadSecretTreeFormat))?,
+			max_keys_to_skip: val.max_keys_to_skip,
+		})
+	}
+}
+
+impl Deserializable for chain_tree::ChainTree {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ChainTree::decode(buf).or(Err(Error::BadChainTreeFormat))?)
 	}
 }
 
@@ -1453,8 +1507,8 @@ impl Deserializable for protocol::Received {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, chain, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
-		nid, proposal, protocol, reuse_guard, roster, secret_tree,
+		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hmac, hpkencrypt, id,
+		key_package, member, nid, proposal, protocol, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
 		treemath, welcome, x448,
 	};
@@ -1486,6 +1540,43 @@ mod tests {
 		let deserialized = chain::Chain::deserialize(&serialized);
 
 		assert_eq!(Ok(c), deserialized);
+	}
+
+	#[test]
+	fn test_chain_tree() {
+		let mut st = secret_tree::HkdfTree::try_new_for_root_secret(18, [42u8; 32]).unwrap();
+		// consume a few secrets to fill up the tree
+		_ = st.get(treemath::LeafIndex(3));
+		_ = st.get(treemath::LeafIndex(11));
+		_ = st.get(treemath::LeafIndex(7));
+
+		let c0 = chain::Chain {
+			skipped_keys: vec![(2, chain::DetachedKey([12u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([78u8; 32]),
+			next_idx: 99,
+			max_keys_to_skip: 57,
+		};
+		let c1 = chain::Chain {
+			skipped_keys: vec![(1, chain::DetachedKey([33u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([66u8; 32]),
+			next_idx: 12,
+			max_keys_to_skip: 57,
+		};
+		let ct = chain_tree::ChainTree {
+			chains: vec![(treemath::LeafIndex(0), c0), (treemath::LeafIndex(1), c1)]
+				.into_iter()
+				.collect(),
+			secret_tree: st,
+			max_keys_to_skip: 57,
+		};
+		let serialized = ct.serialize();
+		let deserialized = chain_tree::ChainTree::deserialize(&serialized);
+
+		assert_eq!(Ok(ct), deserialized);
 	}
 
 	#[test]
