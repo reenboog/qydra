@@ -35,7 +35,7 @@ pub struct SecretTree<Secret, KDF> {
 	pub group_size: LeafCount,
 	pub root: NodeIndex,
 	pub secrets: BTreeMap<NodeIndex, Secret>,
-	kdf: KDF,
+	pub kdf: KDF,
 }
 
 impl<Secret, KDF> SecretTree<Secret, KDF>
@@ -107,7 +107,7 @@ where
 
 const HKDF_SALT: &[u8; hmac::Key::SIZE] = b"SecretTreeSecretTreeSecretTreeSe";
 
-fn hkdf(ikm: &hash::Hash, idx: NodeIndex, info: &[u8]) -> hash::Hash {
+pub fn hkdf(ikm: &hash::Hash, idx: NodeIndex, info: &[u8]) -> hash::Hash {
 	hkdf::Hkdf::from_ikm_salted(ikm, HKDF_SALT)
 		.expand::<{ hash::SIZE }>(&[info, &vec![idx.0 as u8]].concat())
 }

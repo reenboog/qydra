@@ -1,12 +1,12 @@
 include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-	aes_gcm, chain, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, nid,
-	proposal, protocol, roster,
+	aes_gcm, chain, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package, member, nid,
+	proposal, protocol, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
-	welcome,
+	treemath, welcome,
 };
 use prost::Message;
 
@@ -60,6 +60,8 @@ pub enum Error {
 	BadReceivedFormat,
 	WrongDetachedKeySize,
 	BadChainFormat,
+	BadSecretTreeFormat,
+	WrongSecretSize,
 }
 
 // Chain
@@ -118,6 +120,56 @@ impl Deserializable for chain::Chain {
 		Self: Sized,
 	{
 		Self::try_from(Chain::decode(buf).or(Err(Error::BadChainFormat))?)
+	}
+}
+
+// SecretTree
+impl From<&secret_tree::HkdfTree> for SecretTree {
+	fn from(val: &secret_tree::HkdfTree) -> Self {
+		Self {
+			group_size: val.group_size.0,
+			root: val.root.0,
+			secrets: val.secrets.iter().map(|(k, v)| (k.0, v.to_vec())).collect(),
+		}
+	}
+}
+
+impl Serializable for secret_tree::HkdfTree {
+	fn serialize(&self) -> Vec<u8> {
+		SecretTree::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SecretTree> for secret_tree::HkdfTree {
+	type Error = Error;
+
+	fn try_from(val: SecretTree) -> Result<Self, Self::Error> {
+		Ok(Self {
+			group_size: treemath::LeafCount(val.group_size),
+			root: treemath::NodeIndex(val.root),
+			secrets: val
+				.secrets
+				.iter()
+				.map(|(k, v)| {
+					Ok((
+						treemath::NodeIndex(*k),
+						v.clone().try_into().or(Err(Error::WrongSecretSize))?,
+					))
+				})
+				.collect::<Result<BTreeMap<treemath::NodeIndex, hash::Hash>, Error>>()?,
+			kdf: secret_tree::hkdf,
+		})
+	}
+}
+
+impl Deserializable for secret_tree::HkdfTree {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SecretTree::decode(buf).or(Err(Error::BadSecretTreeFormat))?)
 	}
 }
 
@@ -1402,10 +1454,23 @@ impl Deserializable for protocol::Received {
 mod tests {
 	use crate::{
 		aes_gcm, chain, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
-		nid, proposal, protocol, reuse_guard, roster,
+		nid, proposal, protocol, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
-		welcome, x448,
+		treemath, welcome, x448,
 	};
+
+	#[test]
+	fn test_secret_tree() {
+		let mut st = secret_tree::HkdfTree::try_new_for_root_secret(18, [42u8; 32]).unwrap();
+		// consume a few secrets to fill up the tree
+		_ = st.get(treemath::LeafIndex(3));
+		_ = st.get(treemath::LeafIndex(11));
+		_ = st.get(treemath::LeafIndex(7));
+		let serialized = st.serialize();
+		let deserialized = secret_tree::HkdfTree::deserialize(&serialized);
+
+		assert_eq!(Ok(st), deserialized);
+	}
 
 	#[test]
 	fn test_chain() {
