@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{
 	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hash, hpkencrypt, id, key_package,
-	member, nid, proposal, protocol, roster, secret_tree,
+	key_schedule, member, nid, proposal, protocol, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
-	treemath, welcome, key_schedule,
+	treemath, update, welcome,
 };
 use prost::Message;
 
@@ -67,6 +67,8 @@ pub enum Error {
 	BadEpochSecretsFormat,
 	WrongInitKeySize,
 	WrongMacKeySize,
+	BadPendingUpdateFormat,
+	BadPendingCommitFormat,
 }
 
 // Chain
@@ -269,6 +271,46 @@ impl Deserializable for key_schedule::EpochSecrets {
 		Self: Sized,
 	{
 		Self::try_from(EpochSecrets::decode(buf).or(Err(Error::BadEpochSecretsFormat))?)
+	}
+}
+
+// PendingUpdate
+impl From<&update::PendingUpdate> for PendingUpdate {
+	fn from(val: &update::PendingUpdate) -> Self {
+		Self {
+			ilum_dk: val.ilum_dk.to_vec(),
+			x448_dk: val.x448_dk.as_bytes().to_vec(),
+			ssk: val.ssk.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for update::PendingUpdate {
+	fn serialize(&self) -> Vec<u8> {
+		PendingUpdate::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<PendingUpdate> for update::PendingUpdate {
+	type Error = Error;
+
+	fn try_from(val: PendingUpdate) -> Result<Self, Self::Error> {
+		Ok(Self {
+			ilum_dk: val.ilum_dk.try_into().or(Err(Error::WrongIlumKeySize))?,
+			x448_dk: val.x448_dk.try_into().or(Err(Error::WrongX448KeySize))?,
+			ssk: val.ssk.try_into().or(Err(Error::WrongDilithiumKeySize))?,
+		})
+	}
+}
+
+impl Deserializable for update::PendingUpdate {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(PendingUpdate::decode(buf).or(Err(Error::BadPendingUpdateFormat))?)
 	}
 }
 
@@ -1553,9 +1595,10 @@ impl Deserializable for protocol::Received {
 mod tests {
 	use crate::{
 		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, hmac, hpkencrypt, id,
-		key_package, member, nid, proposal, protocol, reuse_guard, roster, secret_tree,
+		key_package, key_schedule, member, nid, proposal, protocol, reuse_guard, roster,
+		secret_tree,
 		serializable::{Deserializable, Serializable},
-		treemath, welcome, x448, key_schedule,
+		treemath, update, welcome, x448,
 	};
 
 	#[test]
@@ -1669,9 +1712,7 @@ mod tests {
 			max_keys_to_skip: 57,
 		};
 		let app = chain_tree::ChainTree {
-			chains: vec![(treemath::LeafIndex(0), c0)]
-				.into_iter()
-				.collect(),
+			chains: vec![(treemath::LeafIndex(0), c0)].into_iter().collect(),
 			secret_tree: st,
 			max_keys_to_skip: 57,
 		};
@@ -1685,7 +1726,21 @@ mod tests {
 		let deserialized = key_schedule::EpochSecrets::deserialize(&serialized);
 
 		assert_eq!(Ok(es), deserialized);
+	}
 
+	#[test]
+	fn test_pending_update() {
+		let seed = b"1234567890abcdef";
+		let ilum = ilum::gen_keypair(seed);
+		let pu = update::PendingUpdate {
+			ilum_dk: ilum.sk,
+			x448_dk: x448::KeyPair::generate().private,
+			ssk: dilithium::KeyPair::generate().private,
+		};
+		let serialized = pu.serialize();
+		let deserialized = update::PendingUpdate::deserialize(&serialized);
+
+		assert_eq!(Ok(pu), deserialized);
 	}
 
 	#[test]

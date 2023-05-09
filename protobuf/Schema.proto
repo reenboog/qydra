@@ -52,7 +52,7 @@ message EpochSecrets {
 
 // FIXME: introduce a wrapper type?
 message PendingCommit {
-	required bytes id = 1;
+	// required bytes id = 1;
 	// the new state
 	required Group state = 2;
 	// ids of framed proposals to ensure no proposals have been received since the commit was sent to the backend
@@ -60,7 +60,7 @@ message PendingCommit {
 }
 
 message PendingUpdate {
-	required bytes id = 1;
+	// required bytes id = 1;
 	required bytes ilum_dk = 2;
 	required bytes x448_dk = 3;
 	required bytes ssk = 4;
