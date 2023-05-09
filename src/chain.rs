@@ -27,7 +27,7 @@ impl DetachedKey {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ChainKey(hash::Hash);
+pub struct ChainKey(pub hash::Hash);
 
 const HKDF_SALT: &[u8; hmac::Key::SIZE] = b"ChainChainChainChainChainChainCh";
 
@@ -38,6 +38,10 @@ impl ChainKey {
 
 	pub fn next(&self) -> Self {
 		Self(Hkdf::from_ikm_salted(&self.0, HKDF_SALT).expand::<{ hash::SIZE }>(b"next"))
+	}
+
+	pub fn as_bytes(&self) -> &[u8] {
+		&self.0
 	}
 }
 

@@ -181,7 +181,7 @@ where
 	A: Api,
 {
 	pub fn handle_received(&self, rcvd: &Received) -> Result<(), Error> {
-		// respect out of order messages: ServerTimestamp?
+		// respect out of order messages: ServerTimestamp? –not required anymore
 		// wlcm
 		// commit
 		// props

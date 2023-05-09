@@ -3,6 +3,69 @@ syntax = "proto2";
 
 package main;
 
+message Group {
+	required bytes uid = 1;
+	required uint64 epoch = 2;
+	required bytes seed = 3;
+
+	required bytes conf_trans_hash = 4;
+	required bytes interim_trans_hash = 5;
+
+	required Roster roster = 6;
+
+	repeated PendingUpdate pending_updates = 7;
+	repeated PendingCommit pending_commits = 8;
+
+	required bytes user_id = 9;
+	required bytes ilum_dk = 10;
+	required bytes x448_dk = 11;
+	required bytes ssk = 12;
+
+	required EpochSecrets secrets = 13;
+}
+
+message ChainTree {
+	map<uint32, Chain> chains = 1;
+	required SecretTree secret_tree = 2;
+	required uint32 max_keys_to_skip = 3;
+}
+
+message Chain {
+	map<uint32, bytes> skipped_keys = 1;
+	required bytes next_key = 2;
+	required uint32 next_idx = 3;
+	required uint32 max_keys_to_skip = 4;
+}
+
+message SecretTree {
+	required uint32 group_size = 1;
+	required uint32 root = 2;
+	map<uint32, bytes> secrets = 3;
+}
+
+message EpochSecrets {
+	required bytes init = 1;
+	required bytes mac = 2;
+	required ChainTree hs = 3;
+	required ChainTree app = 4;
+}
+
+// FIXME: introduce a wrapper type?
+message PendingCommit {
+	required bytes id = 1;
+	// the new state
+	required Group state = 2;
+	// ids of framed proposals to ensure no proposals have been received since the commit was sent to the backend
+	repeated bytes proposals = 3;
+}
+
+message PendingUpdate {
+	required bytes id = 1;
+	required bytes ilum_dk = 2;
+	required bytes x448_dk = 3;
+	required bytes ssk = 4;
+}
+
 message KeyPackage {
 	required bytes ilum_ek = 1;
 	required bytes x448_ek = 2;

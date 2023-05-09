@@ -1,8 +1,10 @@
 include!(concat!(env!("OUT_DIR"), "/main.rs"));
 
+use std::collections::HashMap;
+
 use crate::{
-	aes_gcm, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, nid, proposal,
-	protocol, roster,
+	aes_gcm, chain, ciphertext, commit, dilithium, hpkencrypt, id, key_package, member, nid,
+	proposal, protocol, roster,
 	serializable::{Deserializable, Serializable},
 	welcome,
 };
@@ -56,6 +58,67 @@ pub enum Error {
 	BadReceivedAddFormat,
 	BadReceivedRemoveFormat,
 	BadReceivedFormat,
+	WrongDetachedKeySize,
+	BadChainFormat,
+}
+
+// Chain
+impl From<&chain::Chain> for Chain {
+	fn from(val: &chain::Chain) -> Self {
+		Self {
+			skipped_keys: val
+				.skipped_keys
+				.iter()
+				.map(|(k, v)| (*k, v.0.to_vec()))
+				.collect(),
+			next_key: val.next_key.as_bytes().to_vec(),
+			next_idx: val.next_idx,
+			max_keys_to_skip: val.max_keys_to_skip,
+		}
+	}
+}
+
+impl Serializable for chain::Chain {
+	fn serialize(&self) -> Vec<u8> {
+		Chain::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<Chain> for chain::Chain {
+	type Error = Error;
+
+	fn try_from(val: Chain) -> Result<Self, Self::Error> {
+		Ok(Self {
+			skipped_keys: val
+				.skipped_keys
+				.into_iter()
+				.map(|(k, v)| {
+					Ok((
+						k,
+						chain::DetachedKey(v.try_into().or(Err(Error::WrongDetachedKeySize))?),
+					))
+				})
+				.collect::<Result<HashMap<u32, chain::DetachedKey>, Error>>()?,
+			next_key: chain::ChainKey(
+				val.next_key
+					.try_into()
+					.or(Err(Error::WrongDetachedKeySize))?,
+			),
+			next_idx: val.next_idx,
+			max_keys_to_skip: val.max_keys_to_skip,
+		})
+	}
+}
+
+impl Deserializable for chain::Chain {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(Chain::decode(buf).or(Err(Error::BadChainFormat))?)
+	}
 }
 
 // KeyPackage
@@ -1338,11 +1401,27 @@ impl Deserializable for protocol::Received {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member, nid,
-		proposal, protocol, reuse_guard, roster,
+		aes_gcm, chain, ciphertext, commit, dilithium, hmac, hpkencrypt, id, key_package, member,
+		nid, proposal, protocol, reuse_guard, roster,
 		serializable::{Deserializable, Serializable},
 		welcome, x448,
 	};
+
+	#[test]
+	fn test_chain() {
+		let c = chain::Chain {
+			skipped_keys: vec![(2, chain::DetachedKey([12u8; 32]))]
+				.into_iter()
+				.collect(),
+			next_key: chain::ChainKey([78u8; 32]),
+			next_idx: 99,
+			max_keys_to_skip: 567,
+		};
+		let serialized = c.serialize();
+		let deserialized = chain::Chain::deserialize(&serialized);
+
+		assert_eq!(Ok(c), deserialized);
+	}
 
 	#[test]
 	fn test_key_package() {
