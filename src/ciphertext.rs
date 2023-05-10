@@ -1,10 +1,5 @@
 use crate::{aes_gcm, dilithium, hmac, id::Id, nid::Nid, reuse_guard};
 
-#[derive(Debug, PartialEq)]
-pub enum Error {
-	UnknownContentType,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentType {
 	Msg,
@@ -14,7 +9,6 @@ pub enum ContentType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Ciphertext {
-	pub content_type: ContentType,
 	pub content_id: Id,
 	pub payload: Vec<u8>,
 	pub guid: Id,

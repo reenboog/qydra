@@ -43,7 +43,6 @@ pub enum Error {
 	BadCommitFormat,
 	BadFramedCommitFormat,
 	BadCommitCtdFormat,
-	UnknownContentType,
 	BadCiphertextFormat,
 	WrongKeyPackageIdSize,
 	BadSendCommitFormat,
@@ -1377,52 +1376,11 @@ impl Deserializable for protocol::Send {
 		Self::try_from(Send::decode(buf).or(Err(Error::BadSendFormat))?)
 	}
 }
-// ContentType; TODO: remove?
-
-impl From<&ciphertext::ContentType> for ContentType {
-	fn from(val: &ciphertext::ContentType) -> Self {
-		use ciphertext::ContentType as Cct;
-		use ContentType as Pct;
-
-		match val {
-			Cct::Msg => Pct::App,
-			Cct::Propose => Pct::Propsl,
-			Cct::Commit => Pct::Commt,
-		}
-	}
-}
-
-impl From<ContentType> for ciphertext::ContentType {
-	fn from(val: ContentType) -> Self {
-		use ciphertext::ContentType as Cct;
-		use ContentType as Pct;
-
-		match val {
-			Pct::App => Cct::Msg,
-			Pct::Propsl => Cct::Propose,
-			Pct::Commt => Cct::Commit,
-		}
-	}
-}
-
-impl TryFrom<i32> for ContentType {
-	type Error = Error;
-
-	fn try_from(val: i32) -> Result<Self, Self::Error> {
-		match val {
-			1 => Ok(Self::App),
-			2 => Ok(Self::Propsl),
-			3 => Ok(Self::Commt),
-			_ => Err(Error::UnknownContentType),
-		}
-	}
-}
 
 // Ciphertext
 impl From<&ciphertext::Ciphertext> for Ciphertext {
 	fn from(val: &ciphertext::Ciphertext) -> Self {
 		Self {
-			content_type: ContentType::from(&val.content_type).into(),
 			content_id: val.content_id.as_bytes().to_vec(),
 			payload: val.payload.clone(),
 			guid: val.guid.as_bytes().to_vec(),
@@ -1448,9 +1406,6 @@ impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
 
 	fn try_from(val: Ciphertext) -> Result<Self, Self::Error> {
 		Ok(Self {
-			content_type: ciphertext::ContentType::from(
-				ContentType::try_from(val.content_type).or(Err(Error::UnknownContentType))?,
-			),
 			content_id: id::Id(val.content_id.try_into().or(Err(Error::WrongIdSize))?),
 			payload: val.payload,
 			guid: id::Id(val.guid.try_into().or(Err(Error::WrongGuidSize))?),
@@ -2156,7 +2111,6 @@ mod tests {
 	#[test]
 	fn test_send_add() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2179,7 +2133,6 @@ mod tests {
 			],
 		};
 		let prop = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2204,7 +2157,6 @@ mod tests {
 	#[test]
 	fn test_send_remove() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2227,7 +2179,6 @@ mod tests {
 			],
 		};
 		let prop = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2252,7 +2203,6 @@ mod tests {
 	#[test]
 	fn test_send_invite() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2275,7 +2225,6 @@ mod tests {
 			],
 		};
 		let prop = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2314,7 +2263,6 @@ mod tests {
 	#[test]
 	fn test_send_proposal() {
 		let prop = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2339,7 +2287,6 @@ mod tests {
 	#[test]
 	fn test_send_msg() {
 		let ct = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2364,7 +2311,6 @@ mod tests {
 	#[test]
 	fn test_send() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2387,7 +2333,6 @@ mod tests {
 			],
 		};
 		let prop = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2552,7 +2497,6 @@ mod tests {
 	#[test]
 	fn test_send_commit() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2604,7 +2548,6 @@ mod tests {
 	#[test]
 	fn test_received_commit() {
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2627,7 +2570,6 @@ mod tests {
 	#[test]
 	fn test_received_prop() {
 		let ct0 = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2640,7 +2582,6 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ct1 = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([23u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
 			guid: id::Id([78u8; 32]),
@@ -2664,7 +2605,6 @@ mod tests {
 	#[test]
 	fn test_received_add() {
 		let ct = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([23u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
 			guid: id::Id([78u8; 32]),
@@ -2678,7 +2618,6 @@ mod tests {
 		};
 		let rp = protocol::ReceivedProposal { props: vec![ct] };
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 66, 77, 88, 99, 0],
 			guid: id::Id([34u8; 32]),
@@ -2705,7 +2644,6 @@ mod tests {
 	#[test]
 	fn test_received_remove() {
 		let ct = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([23u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
 			guid: id::Id([78u8; 32]),
@@ -2719,7 +2657,6 @@ mod tests {
 		};
 		let rp = protocol::ReceivedProposal { props: vec![ct] };
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2775,7 +2712,6 @@ mod tests {
 		assert_eq!(Ok(rcvd), deserialized);
 
 		let cti = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),
@@ -2808,7 +2744,6 @@ mod tests {
 		assert_eq!(Ok(rcvd), deserialized);
 
 		let ct = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([23u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
 			guid: id::Id([78u8; 32]),
@@ -2861,7 +2796,6 @@ mod tests {
 	#[test]
 	fn test_ciphertext() {
 		let ct = ciphertext::Ciphertext {
-			content_type: ciphertext::ContentType::Propose,
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
 			guid: id::Id([34u8; 32]),

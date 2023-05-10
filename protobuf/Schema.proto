@@ -57,7 +57,7 @@ message PendingCommit {
 	repeated bytes proposals = 3;
 }
 
-// wraps PendingCommit to support ubytes keys for map
+// wraps PendingCommit to support bytes keys for map
 message PendingCommitEntry {
 	required bytes id = 1;
 	required PendingCommit commit = 2;
@@ -69,7 +69,7 @@ message PendingUpdate {
 	required bytes ssk = 4;
 }
 
-// wraps PendingUpdate to support ubytes keys for map
+// wraps PendingUpdate to support bytes keys for map
 message PendingUpdateEntry {
 	required bytes id = 1;
 	required PendingUpdate upd = 2;
@@ -170,25 +170,18 @@ message CommitCtd {
 	optional CmpdCtd ctd = 2;
 }
 
-enum ContentType {
-	App = 1;
-	Propsl = 2;
-	Commt = 3;
-}
-
 message Ciphertext {
 	// TODO: timestamp against replay attacks?
-	required ContentType content_type = 1;
-	required bytes content_id = 2;
-	required bytes payload = 3;
-	required bytes guid = 4;
-	required uint64 epoch = 5;
-	required uint32 gen = 6;
-	required bytes sender = 7;
-	required bytes iv = 8;
-	required bytes sig = 9;
-	required bytes mac = 10;
-	required bytes reuse_grd = 11;
+	required bytes content_id = 1;
+	required bytes payload = 2;
+	required bytes guid = 3;
+	required uint64 epoch = 4;
+	required uint32 gen = 5;
+	required bytes sender = 6;
+	required bytes iv = 7;
+	required bytes sig = 8;
+	required bytes mac = 9;
+	required bytes reuse_grd = 10;
 }
 
 message WlcmCti {

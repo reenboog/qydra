@@ -317,7 +317,6 @@ impl Group {
 		let mac = hmac::digest(&mac_key, &to_mac);
 
 		Ciphertext {
-			content_type,
 			content_id,
 			sender,
 			guid: self.uid,
@@ -331,7 +330,7 @@ impl Group {
 		}
 	}
 
-	pub fn decrypt<T>(&mut self, ct: Ciphertext) -> Result<T, Error>
+	pub fn decrypt<T>(&mut self, ct: Ciphertext, content_type: ContentType) -> Result<T, Error>
 	where
 		T: Deserializable,
 	{
@@ -351,7 +350,7 @@ impl Group {
 				return Err(Error::InvalidSignature);
 			}
 
-			let chain_tree = self.secrets.chain_tree_for_message_type(ct.content_type);
+			let chain_tree = self.secrets.chain_tree_for_message_type(content_type);
 			let key = chain_tree
 				.get(LeafIndex(leaf), ct.gen)
 				.or(Err(Error::FailedToDeriveChainTreeKey))?;
@@ -1050,7 +1049,7 @@ mod tests {
 	use super::{Error, Group, Owner};
 	use crate::{
 		commit::FramedCommit, dilithium, key_package::KeyPackage, nid::Nid,
-		proposal::FramedProposal, x448,
+		proposal::FramedProposal, x448, ciphertext::ContentType,
 	};
 
 	#[test]
@@ -1179,7 +1178,7 @@ mod tests {
 			.unwrap();
 
 		// ensure recipients (alice for now) can decrypt the encrypted FramedCommit as well
-		assert!(alice_group.decrypt::<FramedCommit>(fc_ct).is_ok());
+		assert!(alice_group.decrypt::<FramedCommit>(fc_ct, ContentType::Commit).is_ok());
 
 		// alices processes
 		let mut alice_group = alice_group
@@ -1288,7 +1287,7 @@ mod tests {
 			.unwrap();
 
 		// decrypt using an encrypted fc this time instead
-		let decrypted_fc = charlie_group.decrypt::<FramedCommit>(fc_ct).unwrap();
+		let decrypted_fc = charlie_group.decrypt::<FramedCommit>(fc_ct, ContentType::Commit).unwrap();
 
 		let charlie_group = charlie_group
 			.process(
@@ -1398,11 +1397,11 @@ mod tests {
 		let (update_alice_prop, ct) = alice_group.propose_update();
 
 		// bob decrypts this ct just fine
-		assert_eq!(Ok(update_alice_prop.clone()), bob_group.decrypt(ct.clone()));
+		assert_eq!(Ok(update_alice_prop.clone()), bob_group.decrypt(ct.clone(), ContentType::Propose));
 		// but alice can't decrypt her own ct, for she has already consumed its key
 		assert_eq!(
 			Err(Error::FailedToDeriveChainTreeKey),
-			alice_group.decrypt::<FramedProposal>(ct)
+			alice_group.decrypt::<FramedProposal>(ct, ContentType::Propose)
 		);
 	}
 

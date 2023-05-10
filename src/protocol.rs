@@ -40,6 +40,13 @@
 
 */
 
+/*
+	An update strategy could be to send an update every 10 messages and commit after 5 messagesafter that.
+	Hence, encrypt should return an optional Update/Commit. 
+
+	Also, a context is required to be added to Welcome. It may include group_name, description, hidden, roles, etc.
+*/
+
 use std::sync::Arc;
 
 use crate::{
@@ -54,6 +61,7 @@ use crate::{
 	proposal::FramedProposal,
 	serializable::Serializable,
 	welcome::{WlcmCtd, WlcmCti},
+	x448, dilithium::{self, Signature},
 };
 
 // a randomly generated public seed that is to be used for all instances of this protocol in order for mPKE to work
@@ -63,6 +71,10 @@ pub const ILUM_SEED: &[u8; 16] =
 #[derive(Debug)]
 pub enum Error {
 	FailedToCreate,
+	DbLocked,
+	KeyPackageNotFound(Id),
+	GroupAlreadyExists(Id),
+	NoGroupFound(Id),
 }
 
 impl From<group::Error> for Error {
@@ -160,8 +172,18 @@ pub enum Received {
 	Msg(Ciphertext),
 }
 
+// private & public keys
+pub struct KeyBundle {
+	ilum: ilum::KeyPair,
+	x448: x448::KeyPair,
+	dilithium: dilithium::KeyPair,
+	sig: Signature,
+}
+
 pub trait Storage {
 	fn save_group(&self, group: &[u8], uid: &[u8], epoch: u64, roster: Vec<&[u8]>);
+	fn get_key_bundle_for_id(&self, id: Id) -> Result<KeyBundle, Error>;
+	fn get_latest_epoch_for_guid(&self, guid: Id) -> Result<u64, Error>;
 }
 
 // TODO: make async
@@ -180,8 +202,30 @@ where
 	S: Storage,
 	A: Api,
 {
-	pub fn handle_received(&self, rcvd: &Received) -> Result<(), Error> {
-		// respect out of order messages: ServerTimestamp? –not required anymore
+	async fn handle_welcome(&self, wlcm: ReceivedWelcome) -> Result<(), Error> {
+		let bundle = self.storage.get_key_bundle_for_id(wlcm.kp_id)?;
+
+		todo!()
+	}
+
+	pub fn handle_received(
+		&self,
+		rcvd: &Received,
+		sender: Nid,
+		receiver: Nid,
+	) -> Result<(), Error> {
+		use Received::*;
+
+		match rcvd {
+			Welcome(w) => {
+				//
+			},
+			Add(_) => todo!(),
+			Remove(_) => todo!(),
+			Props(_) => todo!(),
+			Commit(_) => todo!(),
+			Msg(_) => todo!(),
+		}
 		// wlcm
 		// commit
 		// props
