@@ -6,6 +6,7 @@ use crate::ciphertext::{Ciphertext, ContentType};
 use crate::commit::{Commit, CommitCtd, FramedCommit, PendingCommit};
 use crate::dilithium::Signature;
 use crate::hash::{self, Hash, Hashable};
+use crate::hpkencrypt::CmpdCtd;
 use crate::id::{Id, Identifiable};
 use crate::key_package::KeyPackage;
 use crate::key_schedule::{
@@ -47,8 +48,6 @@ pub enum Error {
 	WrongComSecretSize,
 	// failed to converge to a shared state
 	InvalidConfTag,
-	// this invite was not meant for me
-	NotMyWelcome,
 	// invitee is not in the group, but trying to invite you to it
 	UnauthorizedInviter,
 	// invitation is improperly signed or forged
@@ -756,10 +755,10 @@ impl Group {
 		ssk: &dilithium::PrivateKey,
 		seed: &ilum::Seed,
 		wi: &WlcmCti,
-		wd: &WlcmCtd,
+		wd: &CmpdCtd,
 	) -> Result<Self, Error> {
 		let info = welcome::Info::deserialize(
-			&hpkencrypt::decrypt(&wi.cti, &wd.ctd, seed, &kp.ilum_ek, &ilum_dk, x448_dk)
+			&hpkencrypt::decrypt(&wi.cti, &wd, seed, &kp.ilum_ek, &ilum_dk, x448_dk)
 				.or(Err(Error::HpkeDecryptFailed))?,
 		)
 		.or(Err(Error::WrongWelcomeFormat))?;
@@ -768,10 +767,6 @@ impl Group {
 			.roster
 			.get(&info.inviter)
 			.map_or(Err(Error::UnauthorizedInviter), |m| Ok(m))?;
-
-		if *id != wd.user_id {
-			return Err(Error::NotMyWelcome);
-		}
 
 		let invitee = info
 			.roster
@@ -1048,8 +1043,8 @@ impl Group {
 mod tests {
 	use super::{Error, Group, Owner};
 	use crate::{
-		commit::FramedCommit, dilithium, key_package::KeyPackage, nid::Nid,
-		proposal::FramedProposal, x448, ciphertext::ContentType,
+		ciphertext::ContentType, commit::FramedCommit, dilithium, key_package::KeyPackage,
+		nid::Nid, proposal::FramedProposal, x448,
 	};
 
 	#[test]
@@ -1133,7 +1128,7 @@ mod tests {
 			&bob_user_skp.private,
 			&seed,
 			&wlcms.clone().unwrap().0,
-			wlcms.unwrap().1.get(0).unwrap(),
+			&wlcms.unwrap().1.get(0).unwrap().ctd,
 		)
 		.unwrap();
 
@@ -1178,7 +1173,9 @@ mod tests {
 			.unwrap();
 
 		// ensure recipients (alice for now) can decrypt the encrypted FramedCommit as well
-		assert!(alice_group.decrypt::<FramedCommit>(fc_ct, ContentType::Commit).is_ok());
+		assert!(alice_group
+			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit)
+			.is_ok());
 
 		// alices processes
 		let mut alice_group = alice_group
@@ -1211,7 +1208,7 @@ mod tests {
 			&charlie_user_skp.private,
 			&seed,
 			&wlcms.clone().unwrap().0,
-			wlcms.unwrap().1.get(0).unwrap(),
+			&wlcms.unwrap().1.get(0).unwrap().ctd,
 		)
 		.unwrap();
 
@@ -1287,7 +1284,9 @@ mod tests {
 			.unwrap();
 
 		// decrypt using an encrypted fc this time instead
-		let decrypted_fc = charlie_group.decrypt::<FramedCommit>(fc_ct, ContentType::Commit).unwrap();
+		let decrypted_fc = charlie_group
+			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit)
+			.unwrap();
 
 		let charlie_group = charlie_group
 			.process(
@@ -1375,7 +1374,7 @@ mod tests {
 			&bob_user_skp.private,
 			&seed,
 			&wlcms.clone().unwrap().0,
-			wlcms.unwrap().1.get(0).unwrap(),
+			&wlcms.unwrap().1.get(0).unwrap().ctd,
 		)
 		.unwrap();
 
@@ -1397,7 +1396,10 @@ mod tests {
 		let (update_alice_prop, ct) = alice_group.propose_update();
 
 		// bob decrypts this ct just fine
-		assert_eq!(Ok(update_alice_prop.clone()), bob_group.decrypt(ct.clone(), ContentType::Propose));
+		assert_eq!(
+			Ok(update_alice_prop.clone()),
+			bob_group.decrypt(ct.clone(), ContentType::Propose)
+		);
 		// but alice can't decrypt her own ct, for she has already consumed its key
 		assert_eq!(
 			Err(Error::FailedToDeriveChainTreeKey),

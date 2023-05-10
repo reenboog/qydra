@@ -42,16 +42,19 @@
 
 /*
 	An update strategy could be to send an update every 10 messages and commit after 5 messagesafter that.
-	Hence, encrypt should return an optional Update/Commit. 
+	Hence, encrypt should return an optional Update/Commit.
 
 	Also, a context is required to be added to Welcome. It may include group_name, description, hidden, roles, etc.
 */
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::{
 	ciphertext::Ciphertext,
 	commit::{CommitCtd, FramedCommit},
+	dilithium::{self, Signature},
 	group::{self, Group, Owner},
 	hash::Hash,
 	hpkencrypt::CmpdCtd,
@@ -61,7 +64,7 @@ use crate::{
 	proposal::FramedProposal,
 	serializable::Serializable,
 	welcome::{WlcmCtd, WlcmCti},
-	x448, dilithium::{self, Signature},
+	x448,
 };
 
 // a randomly generated public seed that is to be used for all instances of this protocol in order for mPKE to work
@@ -75,11 +78,13 @@ pub enum Error {
 	KeyPackageNotFound(Id),
 	GroupAlreadyExists(Id),
 	NoGroupFound(Id),
+	GroupCantBeEmpty,
 }
 
 impl From<group::Error> for Error {
 	fn from(val: group::Error) -> Self {
 		match val {
+			// FIXME: implement!
 			_ => Error::FailedToCreate,
 		}
 	}
@@ -172,26 +177,36 @@ pub enum Received {
 	Msg(Ciphertext),
 }
 
-// private & public keys
+// private keys + public KeyPackage
 pub struct KeyBundle {
-	ilum: ilum::KeyPair,
-	x448: x448::KeyPair,
-	dilithium: dilithium::KeyPair,
-	sig: Signature,
+	pub ilum_dk: ilum::SecretKey,
+	pub ilum_ek: ilum::PublicKey,
+	pub x448_dk: x448::PrivateKey,
+	pub x448_ek: x448::PublicKey,
+	pub ssk: dilithium::PrivateKey,
+	pub svk: dilithium::PublicKey,
+	pub sig: Signature,
 }
 
+#[async_trait]
 pub trait Storage {
-	fn save_group(&self, group: &[u8], uid: &[u8], epoch: u64, roster: Vec<&[u8]>);
-	fn get_key_bundle_for_id(&self, id: Id) -> Result<KeyBundle, Error>;
-	fn get_latest_epoch_for_guid(&self, guid: Id) -> Result<u64, Error>;
+	// TODO: could it be sufficient to represent user identity as a signing key?
+	async fn save_group(&self, group: &[u8], uid: &[u8], epoch: u64, roster: Vec<&[u8]>);
+	// someone used my public keys to invite me
+	async fn get_my_prekey_bundle_by_id(&self, id: Id) -> Result<KeyBundle, Error>;
+	async fn delete_my_prekey_bundle_by_id(&self, id: Id) -> Result<(), Error>;
+	// my static qydra identity used to create all groups
+	// TODO: introduce an ephemeral package signed witha static identity?
+	// TODO: should it accept my Nid?
+	async fn get_my_identity_key_bundle(&self) -> Result<KeyBundle, Error>;
+	async fn get_latest_by_guid(&self, guid: Id) -> Result<Group, Error>;
 }
 
-// TODO: make async
+#[async_trait]
 pub trait Api {
-	fn fetch_key_packages(&self, nid: &[Nid]) -> Vec<KeyPackage>;
+	async fn fetch_key_packages(&self, nid: &[Nid]) -> Vec<KeyPackage>;
 }
 
-// TODO: make async
 pub struct Protocol<S, A> {
 	storage: Arc<S>,
 	api: Arc<A>,
@@ -202,80 +217,168 @@ where
 	S: Storage,
 	A: Api,
 {
-	async fn handle_welcome(&self, wlcm: ReceivedWelcome) -> Result<(), Error> {
-		let bundle = self.storage.get_key_bundle_for_id(wlcm.kp_id)?;
+	async fn handle_welcome(&self, wlcm: ReceivedWelcome, receiver: Nid) -> Result<(), Error> {
+		let KeyBundle {
+			ilum_dk,
+			ilum_ek,
+			x448_dk,
+			x448_ek,
+			ssk,
+			svk,
+			sig,
+		} = self.storage.get_my_prekey_bundle_by_id(wlcm.kp_id).await?;
 
+		let group = Group::join(
+			&receiver,
+			&KeyPackage {
+				ilum_ek,
+				x448_ek,
+				svk,
+				sig,
+			},
+			&ilum_dk,
+			&x448_dk,
+			&ssk,
+			ILUM_SEED,
+			&wlcm.cti,
+			&wlcm.ctd,
+		)?;
+
+		// no such group should exist yet
+		if let Err(Error::NoGroupFound(_)) =
+			self.storage.get_latest_by_guid(group.uid()).await
+		{
+			// TODO: check if the sender can invite me
+			self.save_group(&group).await;
+
+			Ok(())
+		} else {
+			Err(Error::GroupAlreadyExists(group.uid()))
+		}
+	}
+
+	async fn handle_add(&self, add: ReceivedAdd, receiver: Nid) -> Result<(), Error> {
 		todo!()
 	}
 
-	pub fn handle_received(
-		&self,
-		rcvd: &Received,
-		sender: Nid,
-		receiver: Nid,
-	) -> Result<(), Error> {
+	async fn handle_remove(&self, remove: ReceivedRemove, receiver: Nid) -> Result<(), Error> {
+		todo!()
+	}
+
+	async fn handle_props(&self, props: ReceivedProposal, receiver: Nid) -> Result<(), Error> {
+		todo!()
+	}
+
+	async fn handle_commit(&self, commit: ReceivedCommit, receiver: Nid) -> Result<(), Error> {
+		todo!()
+	}
+
+	async fn handle_msg(&self, msg: Ciphertext, receiver: Nid) -> Result<(), Error> {
+		todo!()
+	}
+
+	// TODO: should this return anything?
+	pub async fn handle_received(&self, rcvd: Received, receiver: Nid) -> Result<(), Error> {
 		use Received::*;
 
 		match rcvd {
-			Welcome(w) => {
-				//
-			},
-			Add(_) => todo!(),
-			Remove(_) => todo!(),
-			Props(_) => todo!(),
-			Commit(_) => todo!(),
-			Msg(_) => todo!(),
+			Welcome(w) => self.handle_welcome(w, receiver).await,
+			Add(a) => self.handle_add(a, receiver).await,
+			Remove(r) => self.handle_remove(r, receiver).await,
+			Props(p) => self.handle_props(p, receiver).await,
+			Commit(c) => self.handle_commit(c, receiver).await,
+			Msg(m) => self.handle_msg(m, receiver).await,
 		}
-		// wlcm
-		// commit
-		// props
-		// msg
-		todo!()
 	}
 
 	// invitees should NOT contain the group owner, or the process will fail upon proposing
-	// pub fn create_group(&self, owner: Owner, invitees: &[Nid]) -> Result<Id, Error> {
-	// 	// fetch prekeys
-	// 	let kps = self.api.fetch_key_packages(invitees);
-	// 	// create a group of size 1 containing just me
-	// 	let mut group = Group::create(ILUM_SEED.to_owned(), owner);
-	// 	// propose to add everyone
-	// 	let fps = invitees
-	// 		.into_iter()
-	// 		.zip(kps.into_iter())
-	// 		.map(|(nid, kp)| {
-	// 			group
-	// 				.propose_add(*nid, kp)
-	// 				.map(|(fp, _)| fp)
-	// 				.map_err(|e| e.into())
-	// 		})
-	// 		.collect::<Result<Vec<FramedProposal>, Error>>()?;
+	pub async fn create_group(&self, owner_id: Nid, invitees: &[Nid]) -> Result<(Id, SendInvite), Error> {
+		if invitees.is_empty() {
+			Err(Error::GroupCantBeEmpty)
+		} else {
+			// fetch prekeys for each invitee
+			let kps = self.api.fetch_key_packages(invitees).await;
+			// get my identity key bundle
+			// TODO: use just a static signing key instead of a bundle and sign an empeheral key package instead?
+			let KeyBundle {
+				ilum_dk,
+				ilum_ek,
+				x448_dk,
+				x448_ek,
+				ssk,
+				svk,
+				sig,
+			} = self.storage.get_my_identity_key_bundle().await?;
+			let owner = Owner {
+				id: owner_id,
+				kp: KeyPackage {
+					ilum_ek,
+					x448_ek,
+					svk,
+					sig,
+				},
+				ilum_dk,
+				x448_dk,
+				ssk,
+			};
+			// create a group of size 1 containing just me
+			let mut group = Group::create(ILUM_SEED.to_owned(), owner);
+			// propose to add everyone
+			let fps = invitees
+				.into_iter()
+				.zip(kps.into_iter())
+				.map(|(nid, kp)| {
+					group
+						.propose_add(*nid, kp)
+						.map(|(fp, _)| fp)
+						.map_err(|e| e.into())
+				})
+				.collect::<Result<Vec<FramedProposal>, Error>>()?;
 
-	// 	// commit the proposal
-	// 	let (fc, _, ctds, wlcms) = group.commit(&fps)?;
-	// 	// this processed group will now have everyine in it
-	// 	let group = group
-	// 		.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)?
-	// 		.unwrap();
-	// 	// process my own proposal
-	// 	//
-	// 	// send welcomes to everyone
-	// 	// save state
+			// commit the proposal
+			let (fc, _, ctds, wlcms) = group.commit(&fps)?;
+			// this processed group will now have everyone in it
+			let group = group
+				.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)?
+				.unwrap();
 
-	// 	self.save_group(&group);
+			// TODO: add an optional SendInvite in case everything fails?
+			self.save_group(&group).await;
 
-	// 	Ok(group.uid())
-	// }
+			let (wcti, wctds) = wlcms.unwrap();
+			let invite = SendInvite {
+				wcti,
+				wctds,
+				// the group has just been created, so there's nobody to to process this commit but me
+				add: None,
+			};
 
-	// fn save_group(&self, group: &Group) {
-	// 	let roster: Vec<Vec<u8>> = group.roster().ids().iter().map(|n| n.as_bytes()).collect();
-	// 	self.storage.save_group(
-	// 		&group.serialize(),
-	// 		group.uid().as_bytes(),
-	// 		group.epoch(),
-	// 		roster.iter().map(|n| n.as_slice()).collect(),
-	// 	);
-	// }
+			// send SendWelcome to everyone
+			Ok((group.uid(), invite))
+		}
+	}
+
+	async fn encrypt_msg(&self, msg: &[u8], guid: Id) -> Result<(), Error> {
+		// get the latest group
+		// encrypt
+		// save
+		// return
+		todo!()
+	}
+
+	// keep in mind, each nid is simply a concatenation of CID & device_number, eg ABCDEFGH42, so no `:` is used
+	// TODO: do I need to additionally save group meta context, eg name, description, roles, etc?
+	async fn save_group(&self, group: &Group) {
+		let roster: Vec<Vec<u8>> = group.roster().ids().iter().map(|n| n.as_bytes()).collect();
+		self.storage
+			.save_group(
+				&group.serialize(),
+				group.uid().as_bytes(),
+				group.epoch(),
+				roster.iter().map(|n| n.as_slice()).collect(),
+			)
+			.await;
+	}
 }
 
 // enum Message {

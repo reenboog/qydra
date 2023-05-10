@@ -299,3 +299,18 @@ message Received {
 		Ciphertext msg = 6;
 	}
 }
+
+// access management built on top of qydra
+// message SetAccessLevel {
+// 	required bytes user_id = 1;
+// 	required bool admin = 2;
+// }
+
+// // group meta information
+// message GroupMeta {
+// 	optional string name = 1;
+// 	optional string description = 2;
+// 	// admin ids
+// 	repeated bytes admins = 3;
+// 	required bytes owner = 4;
+// }
