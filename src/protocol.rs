@@ -116,6 +116,12 @@ pub struct SendRemove {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct SendEdit {
+	pub prop: Ciphertext,
+	pub commit: SendCommit,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub struct SendProposal {
 	pub props: Vec<Ciphertext>,
 	pub recipients: Vec<Nid>,
@@ -131,6 +137,7 @@ pub struct SendMsg {
 pub enum Send {
 	Invite(SendInvite),
 	Remove(SendRemove),
+	Edit(SendEdit),
 	Props(SendProposal),
 	Commit(SendCommit),
 	Msg(SendMsg),
@@ -168,10 +175,18 @@ pub struct ReceivedRemove {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedEdit {
+	pub prop: Ciphertext,
+	pub cti: Ciphertext,
+	pub ctd: CmpdCtd,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum Received {
 	Welcome(ReceivedWelcome),
 	Add(ReceivedAdd),
 	Remove(ReceivedRemove),
+	Edit(ReceivedEdit),
 	Props(ReceivedProposal),
 	Commit(ReceivedCommit),
 	Msg(Ciphertext),
@@ -245,9 +260,7 @@ where
 		)?;
 
 		// no such group should exist yet
-		if let Err(Error::NoGroupFound(_)) =
-			self.storage.get_latest_by_guid(group.uid()).await
-		{
+		if let Err(Error::NoGroupFound(_)) = self.storage.get_latest_by_guid(group.uid()).await {
 			// TODO: check if the sender can invite me
 			self.save_group(&group).await;
 
@@ -262,6 +275,10 @@ where
 	}
 
 	async fn handle_remove(&self, remove: ReceivedRemove, receiver: Nid) -> Result<(), Error> {
+		todo!()
+	}
+
+	async fn handle_edit(&self, edit: ReceivedEdit, receiver: Nid) -> Result<(), Error> {
 		todo!()
 	}
 
@@ -285,6 +302,7 @@ where
 			Welcome(w) => self.handle_welcome(w, receiver).await,
 			Add(a) => self.handle_add(a, receiver).await,
 			Remove(r) => self.handle_remove(r, receiver).await,
+			Edit(e) => self.handle_edit(e, receiver).await,
 			Props(p) => self.handle_props(p, receiver).await,
 			Commit(c) => self.handle_commit(c, receiver).await,
 			Msg(m) => self.handle_msg(m, receiver).await,
@@ -292,7 +310,11 @@ where
 	}
 
 	// invitees should NOT contain the group owner, or the process will fail upon proposing
-	pub async fn create_group(&self, owner_id: Nid, invitees: &[Nid]) -> Result<(Id, SendInvite), Error> {
+	pub async fn create_group(
+		&self,
+		owner_id: Nid,
+		invitees: &[Nid],
+	) -> Result<(Id, SendInvite), Error> {
 		if invitees.is_empty() {
 			Err(Error::GroupCantBeEmpty)
 		} else {

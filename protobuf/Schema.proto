@@ -22,6 +22,8 @@ message Group {
 	required bytes ssk = 12;
 
 	required EpochSecrets secrets = 13;
+
+	required bytes description = 14;
 }
 
 message ChainTree {
@@ -99,6 +101,7 @@ message GroupInfo {
 	required bytes conf_tag = 5;
 	required bytes inviter = 6;
 	required bytes joiner = 7;
+	required bytes description = 8;
 }
 
 message Prop {
@@ -115,11 +118,16 @@ message Prop {
 		required KeyPackage kp = 2;
 	}
 
+	message Edit {
+		required bytes description = 1;
+	}
+
 	oneof variant {
 		// option (validate.required) = true;
 		Remove remove = 1;
 		Update update = 2;
 		Add add = 3;
+		Edit edit = 4;
 	}
 }
 
@@ -224,6 +232,11 @@ message SendAdd {
 	required SendCommit commit = 2;
 }
 
+message SendEdit {
+	required Ciphertext prop = 1;
+	required SendCommit commit = 2;
+}
+
 message SendInvite {
 	// for the backend to fanout this:
 	// wctds.for_each(|ctd| {
@@ -249,12 +262,14 @@ message Send {
 		SendInvite invite = 1;
 		// a combined (props, commit)
 		SendRemove remove = 2;
+		// policy update, name/description change – anything
+		SendEdit edit = 3;
 		// usually just update proposals, but can be more generic
-		SendProposal props = 3; 
+		SendProposal props = 4; 
 		// update commit, but can be more generic
-		SendCommit commit = 4; 
+		SendCommit commit = 5; 
 		// an arbitrary app message
-		SendMsg msg = 5;
+		SendMsg msg = 6;
 	}
 }
 
@@ -286,25 +301,28 @@ message ReceivedRemove {
 	optional CmpdCtd ctd = 3; 
 }
 
+message ReceivedEdit {
+	// the proposal itself
+	required Ciphertext prop = 1;
+	// commit cti & ctd
+	required Ciphertext cti = 2;
+	required CmpdCtd ctd = 3;
+}
+
 message Received {
 	oneof variant {
 		ReceivedWelcome wlcm = 1;
 		ReceivedAdd add = 2;
 		ReceivedRemove remove = 3;
+		ReceivedEdit edit = 4;
 		// update proposals, but can be more generic
-		ReceivedProposal props = 4;
+		ReceivedProposal props = 5;
 		// update commit, but can be more generic
-		ReceivedCommit commit = 5;
+		ReceivedCommit commit = 6;
 		// an arbitrary app message
-		Ciphertext msg = 6;
+		Ciphertext msg = 7;
 	}
 }
-
-// access management built on top of qydra
-// message SetAccessLevel {
-// 	required bytes user_id = 1;
-// 	required bool admin = 2;
-// }
 
 // // group meta information
 // message GroupMeta {

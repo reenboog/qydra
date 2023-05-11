@@ -102,6 +102,8 @@ pub struct Group {
 	ssk: dilithium::PrivateKey,
 
 	secrets: EpochSecrets,
+
+	description: Vec<u8>,
 }
 
 // a similar structure should be used for `me` in `Group`
@@ -129,6 +131,7 @@ impl Group {
 		x448_dk: x448::PrivateKey,
 		ssk: dilithium::PrivateKey,
 		secrets: EpochSecrets,
+		description: Vec<u8>,
 	) -> Self {
 		Self {
 			uid,
@@ -144,6 +147,7 @@ impl Group {
 			x448_dk,
 			ssk,
 			secrets,
+			description,
 		}
 	}
 
@@ -199,6 +203,10 @@ impl Group {
 		&self.secrets
 	}
 
+	pub fn description(&self) -> &[u8] {
+		&self.description
+	}
+
 	// generates a group owned by owner; recipients should use a different initializer!
 	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
 		let roster = Roster::from(Member::new(owner.id, owner.kp));
@@ -206,7 +214,8 @@ impl Group {
 		let epoch = 0;
 		let joiner_secret = rand::thread_rng().gen();
 		let conf_trans_hash = hash::empty();
-		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash);
+		let description = vec![];
+		let ctx = Self::derive_ctx(&uid, epoch, &roster, &conf_trans_hash, &description);
 		let (secrets, conf_key) = key_schedule::derive_epoch_secrets(ctx, &joiner_secret, 1);
 		let conf_tag = Self::conf_tag(&conf_key, &conf_trans_hash);
 		let interim_trans_hash = Self::interim_trans_hash(&conf_trans_hash, conf_tag.as_bytes());
@@ -232,6 +241,7 @@ impl Group {
 			ssk: owner.ssk,
 
 			secrets,
+			description,
 		}
 	}
 
@@ -246,7 +256,19 @@ impl Group {
 	}
 
 	fn ctx(&self) -> Hash {
-		Self::derive_ctx(&self.uid, self.epoch, &self.roster, &self.conf_trans_hash)
+		Self::derive_ctx(
+			&self.uid,
+			self.epoch,
+			&self.roster,
+			&self.conf_trans_hash,
+			&self.description,
+		)
+	}
+
+	pub fn propose_edit(&mut self, description: &[u8]) -> (FramedProposal, Ciphertext) {
+		self.frame_proposal(Proposal::Edit {
+			description: description.to_vec(),
+		})
 	}
 
 	pub fn propose_add(
@@ -524,7 +546,7 @@ impl Group {
 		Error,
 	> {
 		// apply previously stored proposals and get (new_group, diff { updated, removed, added })
-		let (mut new, diff) = self.apply_proposals(fps)?;
+		let (mut new, diff, fps) = self.apply_proposals(fps)?;
 
 		// REVIEW: this should be checked by a higher level in the first place
 		// self-removing commits make not sence for it is the committer who generates new entropy:
@@ -563,7 +585,7 @@ impl Group {
 			kp: com_kp,
 			cti: encryption.cti,
 			// this commit will include all the given proposal ids
-			prop_ids: fps.iter().map(|fp| fp.id()).collect(),
+			prop_ids: fps.iter().map(|fp| fp.id).collect(),
 		};
 
 		// sign commit
@@ -607,7 +629,7 @@ impl Group {
 			framed_commit.id(),
 			PendingCommit {
 				state: new,
-				proposals: fps.iter().map(|p| p.id()).collect(),
+				proposals: fps.iter().map(|p| p.id).collect(),
 			},
 		);
 
@@ -653,7 +675,7 @@ impl Group {
 				return Err(Error::PropsMismatch);
 			}
 
-			let (mut new, diff) = self.apply_proposals(&fps)?;
+			let (mut new, diff, _) = self.apply_proposals(&fps)?;
 
 			if diff.removed.contains(&sender) {
 				// committers can't remove themselves
@@ -725,6 +747,7 @@ impl Group {
 				conf_tag.clone(),
 				self.user_id,
 				joiner_secret.clone(),
+				self.description.clone(),
 			);
 			let keys = invited
 				.iter()
@@ -787,7 +810,13 @@ impl Group {
 			return Err(Error::ForgedRoster);
 		}
 
-		let ctx = Self::derive_ctx(&info.guid, info.epoch, &info.roster, &info.conf_trans_hash);
+		let ctx = Self::derive_ctx(
+			&info.guid,
+			info.epoch,
+			&info.roster,
+			&info.conf_trans_hash,
+			&info.description,
+		);
 		let (secrets, conf_key) =
 			key_schedule::derive_epoch_secrets(ctx, &info.joiner, info.roster.len());
 
@@ -812,6 +841,7 @@ impl Group {
 			x448_dk: x448_dk.clone(),
 			ssk: ssk.clone(),
 			secrets,
+			description: info.description,
 		};
 
 		return Ok(group);
@@ -899,14 +929,17 @@ impl Group {
 	}
 
 	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
-	fn apply_proposals(&self, fps: &[FramedProposal]) -> Result<(Group, Diff), Error> {
+	fn apply_proposals(
+		&self,
+		fps: &[FramedProposal],
+	) -> Result<(Group, Diff, Vec<UnframedProposal>), Error> {
 		let mut new = self.next();
 		let mut diff = Diff::new();
 
 		// verify guid, epoch, signature, mac & sender's membership
 		let mut fps = self.verify_unframe_proposals(fps);
 
-		// enforce (remove -> update -> add) order
+		// enforce (remove -> update -> add -> edit) order
 		use std::cmp::Ordering;
 		use Proposal::*;
 
@@ -916,10 +949,12 @@ impl Group {
 			(Update { kp: ref kp_a }, Update { kp: ref kp_b }) => kp_a.hash().cmp(&kp_b.hash()),
 			(Update { .. }, Add { .. }) => Ordering::Less,
 			(Add { .. }, Add { .. }) => a.sender.cmp(&b.sender),
+			// with this, the last proposal will be applied, but in reality we'll never be here
+			(Edit { .. }, Edit { .. }) => a.sender.cmp(&b.sender),
 			_ => Ordering::Greater,
 		});
 
-		for fp in fps {
+		for fp in &fps {
 			let UnframedProposal {
 				id: fp_id,
 				sender,
@@ -930,7 +965,7 @@ impl Group {
 				Remove { id } => {
 					// cross deletions are allowed, but keep track of who's already deleted
 					if new.roster.remove(&id).is_ok() {
-						diff.removed.push(id);
+						diff.removed.push(*id);
 					}
 				}
 				Update { ref kp } => {
@@ -943,7 +978,7 @@ impl Group {
 						new.roster.set(&sender, kp);
 
 						// this is my own update, it is verified, so set ssk & dk as well
-						if sender == new.user_id {
+						if *sender == new.user_id {
 							if let Some(pu) = self.pending_updates.get(&fp_id) {
 								new.ssk = pu.ssk.clone();
 								new.ilum_dk = pu.ilum_dk;
@@ -955,7 +990,7 @@ impl Group {
 							}
 						}
 
-						diff.updated.push(sender);
+						diff.updated.push(*sender);
 					} else {
 						// just ignore this kp
 						continue;
@@ -966,7 +1001,7 @@ impl Group {
 					// do not add, if added
 					// ignore if the key pair is invalid
 					if !diff.removed.contains(&sender) && !new.roster.contains(&id) && kp.verify() {
-						let added = Member::new(id, kp.clone());
+						let added = Member::new(*id, kp.clone());
 
 						_ = new.roster.add(added.clone());
 						diff.added.push(added);
@@ -975,6 +1010,9 @@ impl Group {
 						continue;
 					}
 				}
+				Edit { description } => {
+					new.description = description.clone();
+				}
 			};
 		}
 
@@ -982,7 +1020,7 @@ impl Group {
 			// an empty list does not generate new state, so throw
 			Err(Error::EmptyPropsList)
 		} else {
-			Ok((new, diff))
+			Ok((new, diff, fps))
 		}
 	}
 }
@@ -1025,13 +1063,20 @@ impl Group {
 		)
 	}
 
-	fn derive_ctx(uid: &Id, epoch: u64, roster: &Roster, conf_trans_hash: &Hash) -> Hash {
+	fn derive_ctx(
+		uid: &Id,
+		epoch: u64,
+		roster: &Roster,
+		conf_trans_hash: &Hash,
+		description: &[u8],
+	) -> Hash {
 		Sha256::digest(
 			[
 				uid.as_bytes(),
 				epoch.to_be_bytes().as_slice(),
 				&roster.hash(),
 				conf_trans_hash,
+				description,
 			]
 			.concat(),
 		)
@@ -1104,9 +1149,14 @@ mod tests {
 			.propose_add(bob_user_id, bob_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
+		let (edit_prop, _) = alice_group.propose_edit(b"v1");
 		// alice invites using her initial group
 		let (fc, _, ctds, wlcms) = alice_group
-			.commit(&[add_bob_prop.clone(), update_alice_prop.clone()])
+			.commit(&[
+				add_bob_prop.clone(),
+				update_alice_prop.clone(),
+				edit_prop.clone(),
+			])
 			.unwrap();
 
 		// and get alice_group
@@ -1114,7 +1164,7 @@ mod tests {
 			.process(
 				&fc,
 				ctds.first().unwrap().ctd.as_ref(),
-				&[add_bob_prop, update_alice_prop],
+				&[add_bob_prop, edit_prop, update_alice_prop],
 			)
 			.unwrap()
 			.unwrap();
@@ -1146,6 +1196,7 @@ mod tests {
 			bob_group.pending_updates.len()
 		);
 		assert_eq!(alice_group.secrets, bob_group.secrets);
+		assert_eq!(alice_group.description, bob_group.description);
 
 		let charlie_user_id = Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
@@ -1246,6 +1297,7 @@ mod tests {
 		assert_eq!(charlie_group.secrets, bob_group.secrets);
 
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
+		let (edit_prop, _) = alice_group.propose_edit(b"v2");
 		let (update_charlie_prop, _) = charlie_group.propose_update();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (fc, fc_ct, ctds, wlcms) = bob_group
@@ -1253,6 +1305,7 @@ mod tests {
 				remove_alice_prop.clone(),
 				update_charlie_prop.clone(),
 				update_alice_prop.clone(),
+				edit_prop.clone(),
 			])
 			.unwrap();
 		let alice_group = alice_group
@@ -1262,6 +1315,7 @@ mod tests {
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop.clone(),
+					edit_prop.clone(),
 					update_charlie_prop.clone(),
 				],
 			)
@@ -1276,6 +1330,7 @@ mod tests {
 				ctds.get(1).unwrap().ctd.as_ref(),
 				&[
 					remove_alice_prop.clone(),
+					edit_prop.clone(),
 					update_alice_prop.clone(),
 					update_charlie_prop.clone(),
 				],
@@ -1295,6 +1350,7 @@ mod tests {
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop,
+					edit_prop,
 					update_charlie_prop.clone(),
 				],
 			)

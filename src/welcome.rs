@@ -48,6 +48,7 @@ pub struct Info {
 	pub conf_tag: hmac::Digest,
 	pub inviter: Nid,
 	pub joiner: JoinerSecret,
+	pub description: Vec<u8>,
 }
 
 impl Info {
@@ -59,6 +60,7 @@ impl Info {
 		conf_tag: hmac::Digest,
 		inviter: Nid,
 		joiner: JoinerSecret,
+		description: Vec<u8>,
 	) -> Self {
 		Self {
 			guid,
@@ -68,6 +70,7 @@ impl Info {
 			conf_tag,
 			inviter,
 			joiner,
+			description,
 		}
 	}
 }
@@ -83,6 +86,7 @@ impl Hashable for Info {
 				self.conf_tag.as_bytes(),
 				self.inviter.as_bytes().as_slice(),
 				&self.joiner,
+				&self.description,
 			]
 			.concat(),
 		)

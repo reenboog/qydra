@@ -5,6 +5,7 @@ use crate::{
 	id::{Id, Identifiable},
 	key_package::KeyPackage,
 	nid::Nid,
+	serializable::Deserializable,
 };
 
 #[derive(Clone, PartialEq, Debug)]
@@ -12,6 +13,7 @@ pub enum Proposal {
 	Remove { id: Nid },
 	Update { kp: KeyPackage },
 	Add { id: Nid, kp: KeyPackage },
+	Edit { description: Vec<u8> },
 }
 
 // Recovery: No need for a proposal, because the assumption is that group members no longer share the same state.
@@ -50,11 +52,13 @@ Due to the asynchronous nature of proposals, receivers of a Commit
 impl Hashable for Proposal {
 	fn hash(&self) -> Hash {
 		use sha2::{Digest, Sha256};
+		use Proposal::*;
 
 		let bytes = match self {
-			Proposal::Add { id, kp } => [id.as_bytes().as_slice(), &kp.hash()].concat(),
-			Proposal::Remove { id } => id.as_bytes().to_vec(),
-			Proposal::Update { kp } => kp.hash().to_vec(),
+			Add { id, kp } => [id.as_bytes().as_slice(), &kp.hash()].concat(),
+			Remove { id } => id.as_bytes().to_vec(),
+			Update { kp } => kp.hash().to_vec(),
+			Edit { description } => description.clone(),
 		};
 
 		Sha256::digest(bytes).into()

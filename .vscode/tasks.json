@@ -4,7 +4,7 @@
 		{
 			"label": "rust: cargo nextest",
 			"type": "shell",
-			"command": "cargo nextest run",
+			"command": "env RUST_MIN_STACK=4194304 cargo nextest run",
 			"args": [],
 			"group": {
 				"kind": "test",
@@ -15,7 +15,7 @@
 		{
 		"label": "rust: cargo test",
 		"type": "shell",
-		"command": "cargo test",
+		"command": "env RUST_MIN_STACK=4194304 cargo test",
 		"args": [],
 		"group": {
 			"kind": "test",

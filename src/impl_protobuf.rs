@@ -49,6 +49,7 @@ pub enum Error {
 	BadSendAddFormat,
 	BadSendInviteFormat,
 	BadSendRemoveFormat,
+	BadSendEditFormat,
 	BadSendProposalFormat,
 	BadSendMsgFormat,
 	BadSendFormat,
@@ -57,6 +58,7 @@ pub enum Error {
 	BadReceivedProposalFormat,
 	BadReceivedAddFormat,
 	BadReceivedRemoveFormat,
+	BadReceivedEditFormat,
 	BadReceivedFormat,
 	WrongDetachedKeySize,
 	BadChainFormat,
@@ -347,6 +349,7 @@ impl From<&group::Group> for Group {
 			x448_dk: val.x448_dk().as_bytes().to_vec(),
 			ssk: val.ssk().as_bytes().to_vec(),
 			secrets: val.secrets().into(),
+			description: val.description().to_vec(),
 		}
 	}
 }
@@ -403,6 +406,7 @@ impl TryFrom<Group> for group::Group {
 			val.secrets
 				.try_into()
 				.or(Err(Error::BadEpochSecretsFormat))?,
+			val.description,
 		))
 	}
 }
@@ -599,6 +603,7 @@ impl From<&welcome::Info> for GroupInfo {
 			conf_tag: val.conf_tag.as_bytes().to_vec(),
 			inviter: val.inviter.as_bytes().to_vec(),
 			joiner: val.joiner.to_vec(),
+			description: val.description.clone(),
 		}
 	}
 }
@@ -623,6 +628,7 @@ impl TryFrom<GroupInfo> for welcome::Info {
 			val.conf_tag.try_into().or(Err(Error::WrongConfTagSize))?,
 			nid::Nid::try_from(val.inviter).or(Err(Error::WrongNidSize))?,
 			val.joiner.try_into().or(Err(Error::WrongJoinerSize))?,
+			val.description,
 		))
 	}
 }
@@ -734,6 +740,9 @@ impl From<&proposal::Proposal> for Prop {
 					id: id.as_bytes().to_vec(),
 					kp: kp.into(),
 				}),
+				Edit { description } => Variant::Edit(prop::Edit {
+					description: description.clone(),
+				}),
 			}),
 		}
 	}
@@ -762,6 +771,9 @@ impl TryFrom<Prop> for proposal::Proposal {
 			Variant::Add(a) => Add {
 				id: nid::Nid::try_from(a.id).or(Err(Error::WrongIdSize))?,
 				kp: a.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
+			},
+			Variant::Edit(e) => Edit {
+				description: e.description,
 			},
 		})
 	}
@@ -1225,6 +1237,45 @@ impl Deserializable for protocol::SendRemove {
 	}
 }
 
+// SendEdit
+impl From<&protocol::SendEdit> for SendEdit {
+	fn from(val: &protocol::SendEdit) -> Self {
+		Self {
+			prop: (&val.prop).into(),
+			commit: (&val.commit).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::SendEdit {
+	fn serialize(&self) -> Vec<u8> {
+		SendEdit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendEdit> for protocol::SendEdit {
+	type Error = Error;
+
+	fn try_from(val: SendEdit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			prop: val.prop.try_into().or(Err(Error::BadCiphertextFormat))?,
+			commit: protocol::SendCommit::try_from(val.commit)
+				.or(Err(Error::BadSendCommitFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::SendEdit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendEdit::decode(buf).or(Err(Error::BadSendRemoveFormat))?)
+	}
+}
+
 // SendProposal
 impl From<&protocol::SendProposal> for SendProposal {
 	fn from(val: &protocol::SendProposal) -> Self {
@@ -1335,6 +1386,7 @@ impl From<&protocol::Send> for Send {
 			variant: Some(match val {
 				protocol::Send::Invite(i) => Variant::Invite(SendInvite::from(i)),
 				protocol::Send::Remove(r) => Variant::Remove(SendRemove::from(r)),
+				protocol::Send::Edit(e) => Variant::Edit(SendEdit::from(e)),
 				protocol::Send::Props(p) => Variant::Props(SendProposal::from(p)),
 				protocol::Send::Commit(c) => Variant::Commit(SendCommit::from(c)),
 				protocol::Send::Msg(m) => Variant::Msg(SendMsg::from(m)),
@@ -1359,6 +1411,7 @@ impl TryFrom<Send> for protocol::Send {
 		Ok(match val.variant.ok_or(Error::BadSendFormat)? {
 			Variant::Invite(i) => Invite(i.try_into()?),
 			Variant::Remove(r) => Remove(r.try_into()?),
+			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
 			Variant::Commit(c) => Commit(c.try_into()?),
 			Variant::Msg(m) => Msg(m.try_into()?),
@@ -1644,6 +1697,49 @@ impl Deserializable for protocol::ReceivedRemove {
 	}
 }
 
+// ReceivedEdit
+impl From<&protocol::ReceivedEdit> for ReceivedEdit {
+	fn from(val: &protocol::ReceivedEdit) -> Self {
+		Self {
+			prop: (&val.prop).into(),
+			cti: (&val.cti).into(),
+			ctd: (&val.ctd).into(),
+		}
+	}
+}
+
+impl Serializable for protocol::ReceivedEdit {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedEdit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedEdit> for protocol::ReceivedEdit {
+	type Error = Error;
+
+	fn try_from(val: ReceivedEdit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			prop: val
+				.prop
+				.try_into()
+				.or(Err(Error::BadReceivedProposalFormat))?,
+			cti: val.cti.try_into().or(Err(Error::BadCiphertextFormat))?,
+			ctd: val.ctd.try_into().or(Err(Error::BadCtdFormat))?,
+		})
+	}
+}
+
+impl Deserializable for protocol::ReceivedEdit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedEdit::decode(buf).or(Err(Error::BadReceivedEditFormat))?)
+	}
+}
+
 // Received
 impl From<&protocol::Received> for Received {
 	fn from(val: &protocol::Received) -> Self {
@@ -1654,6 +1750,7 @@ impl From<&protocol::Received> for Received {
 				protocol::Received::Welcome(w) => Variant::Wlcm(w.into()),
 				protocol::Received::Add(a) => Variant::Add(a.into()),
 				protocol::Received::Remove(r) => Variant::Remove(r.into()),
+				protocol::Received::Edit(e) => Variant::Edit(e.into()),
 				protocol::Received::Props(p) => Variant::Props(p.into()),
 				protocol::Received::Commit(c) => Variant::Commit(c.into()),
 				protocol::Received::Msg(m) => Variant::Msg(m.into()),
@@ -1679,6 +1776,7 @@ impl TryFrom<Received> for protocol::Received {
 			Variant::Wlcm(w) => Welcome(w.try_into()?),
 			Variant::Add(a) => Add(a.try_into()?),
 			Variant::Remove(r) => Remove(r.try_into()?),
+			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
 			Variant::Commit(c) => Commit(c.try_into()?),
 			Variant::Msg(m) => Msg(m.try_into()?),
