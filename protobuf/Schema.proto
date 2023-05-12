@@ -185,6 +185,7 @@ message Ciphertext {
 	required bytes guid = 3;
 	required uint64 epoch = 4;
 	required uint32 gen = 5;
+	// TODO: sender might be removed
 	required bytes sender = 6;
 	required bytes iv = 7;
 	required bytes sig = 8;
@@ -226,6 +227,12 @@ message SendMsg {
 	repeated bytes recipients = 2;
 }
 
+message SendLeave {
+	// something needs to be sent to verify this leave, eg an optional farewell message or a ts?
+	// this could be a sub message of SendMsg instead, but it's better to keep things separated
+	required SendMsg farewell = 1;
+}
+
 message SendAdd {
 	// commit & each prop is sent to commit.ctds.user_id
 	repeated Ciphertext props = 1;
@@ -254,14 +261,6 @@ message SendRemove {
 	// commit & each prop is sent to commit.ctds.user_id
 	repeated Ciphertext props = 1;
 	required SendCommit commit = 2;
-	// if specified, this user LEFT, so a delegated REMOVE is required
-	// message Leave {
-	//	required bytes user_id = 1;
-	//	required bytes guid = 2;
-	//	required uint64 epoch = 3;
-	//	required bytes sig = 4; // signs all the fields above
-	// }
-	// optional Leave delegated_ctx = 3;
 }
 
 message Send {
@@ -276,8 +275,10 @@ message Send {
 		SendProposal props = 4; 
 		// update commit, but can be more generic
 		SendCommit commit = 5; 
+		// a request to leave the group
+		SendLeave leave = 6;
 		// an arbitrary app message
-		SendMsg msg = 6;
+		SendMsg msg = 7;
 	}
 }
 
@@ -327,8 +328,10 @@ message Received {
 		ReceivedProposal props = 5;
 		// update commit, but can be more generic
 		ReceivedCommit commit = 6;
+		// a request to leave
+		Ciphertext leave = 7;
 		// an arbitrary app message
-		Ciphertext msg = 7;
+		Ciphertext msg = 8;
 	}
 }
 

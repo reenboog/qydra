@@ -46,6 +46,11 @@ pub struct SendMsg {
 	pub recipients: Vec<Nid>,
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub struct SendLeave {
+	pub farewell: SendMsg,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Send {
 	Invite(SendInvite),
@@ -53,6 +58,7 @@ pub enum Send {
 	Edit(SendEdit),
 	Props(SendProposal),
 	Commit(SendCommit),
+	Leave(SendLeave),
 	Msg(SendMsg),
 }
 
@@ -102,6 +108,7 @@ pub enum Received {
 	Edit(ReceivedEdit),
 	Props(ReceivedProposal),
 	Commit(ReceivedCommit),
+	Leave(Ciphertext),
 	Msg(Ciphertext),
 }
 

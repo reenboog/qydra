@@ -46,6 +46,7 @@ pub enum Error {
 	BadCiphertextFormat,
 	WrongKeyPackageIdSize,
 	BadSendCommitFormat,
+	BadSendLeaveFormat,
 	BadSendAddFormat,
 	BadSendInviteFormat,
 	BadSendRemoveFormat,
@@ -55,6 +56,7 @@ pub enum Error {
 	BadSendFormat,
 	BadReceivedWelcomeFormat,
 	BadReceivedCommitFormat,
+	BadReceivedLeaveFormat,
 	BadReceivedProposalFormat,
 	BadReceivedAddFormat,
 	BadReceivedRemoveFormat,
@@ -1096,6 +1098,42 @@ impl Deserializable for transport::SendCommit {
 	}
 }
 
+// SendLeave
+impl From<&transport::SendLeave> for SendLeave {
+	fn from(val: &transport::SendLeave) -> Self {
+		Self {
+			farewell: (&val.farewell).into(),
+		}
+	}
+}
+
+impl Serializable for transport::SendLeave {
+	fn serialize(&self) -> Vec<u8> {
+		SendLeave::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendLeave> for transport::SendLeave {
+	type Error = Error;
+
+	fn try_from(val: SendLeave) -> Result<Self, Self::Error> {
+		Ok(Self {
+			farewell: val.farewell.try_into().or(Err(Error::BadCiphertextFormat))?,
+		})
+	}
+}
+
+impl Deserializable for transport::SendLeave {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendLeave::decode(buf).or(Err(Error::BadSendLeaveFormat))?)
+	}
+}
+
 // SendAdd
 impl From<&transport::SendAdd> for SendAdd {
 	fn from(val: &transport::SendAdd) -> Self {
@@ -1389,6 +1427,7 @@ impl From<&transport::Send> for Send {
 				transport::Send::Edit(e) => Variant::Edit(SendEdit::from(e)),
 				transport::Send::Props(p) => Variant::Props(SendProposal::from(p)),
 				transport::Send::Commit(c) => Variant::Commit(SendCommit::from(c)),
+				transport::Send::Leave(l) => Variant::Leave(SendLeave::from(l)),
 				transport::Send::Msg(m) => Variant::Msg(SendMsg::from(m)),
 			}),
 		}
@@ -1414,6 +1453,7 @@ impl TryFrom<Send> for transport::Send {
 			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
 			Variant::Commit(c) => Commit(c.try_into()?),
+			Variant::Leave(l) => Leave(l.try_into()?),
 			Variant::Msg(m) => Msg(m.try_into()?),
 		})
 	}
@@ -1753,6 +1793,7 @@ impl From<&transport::Received> for Received {
 				transport::Received::Edit(e) => Variant::Edit(e.into()),
 				transport::Received::Props(p) => Variant::Props(p.into()),
 				transport::Received::Commit(c) => Variant::Commit(c.into()),
+				transport::Received::Leave(l) => Variant::Leave(l.into()),
 				transport::Received::Msg(m) => Variant::Msg(m.into()),
 			}),
 		}
@@ -1779,6 +1820,7 @@ impl TryFrom<Received> for transport::Received {
 			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
 			Variant::Commit(c) => Commit(c.try_into()?),
+			Variant::Leave(l) => Leave(l.try_into()?),
 			Variant::Msg(m) => Msg(m.try_into()?),
 		})
 	}
@@ -2382,6 +2424,79 @@ mod tests {
 	}
 
 	#[test]
+	fn test_send_edit() {
+		let ct = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let cti = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sc = transport::SendCommit {
+			cti: cti.clone(),
+			ctds: vec![
+				commit::CommitCtd::new(
+					nid::Nid::new(b"abcdefgh", 0),
+					Some(hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3])),
+				),
+				commit::CommitCtd::new(nid::Nid::new(b"ssfdsss2", 0), None),
+			],
+		};
+		let se = transport::SendEdit {
+			prop: ct,
+			commit: sc,
+		};
+		let serialized = se.serialize();
+		let deserialized = transport::SendEdit::deserialize(&serialized);
+
+		assert_eq!(Ok(se), deserialized);
+	}
+
+	#[test]
+	fn test_send_leave() {
+		let ct = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sm = transport::SendMsg {
+			payload: ct,
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+		let sl = transport::SendLeave {
+			farewell: sm,
+		};
+		let serialized = sl.serialize();
+		let deserialized = transport::SendLeave::deserialize(&serialized);
+
+		assert_eq!(Ok(sl), deserialized);
+	}
+
+	#[test]
 	fn test_send_msg() {
 		let ct = ciphertext::Ciphertext {
 			content_id: id::Id([12u8; 32]),
@@ -2783,6 +2898,44 @@ mod tests {
 		};
 		let serialized = rr.serialize();
 		let deserialized = transport::ReceivedRemove::deserialize(&serialized);
+
+		assert_eq!(Ok(rr), deserialized);
+	}
+
+	#[test]
+	fn test_received_edit() {
+		let prop = ciphertext::Ciphertext {
+			content_id: id::Id([23u8; 32]),
+			payload: vec![11, 22, 33, 44, 55, 6, 7, 8, 9, 0],
+			guid: id::Id([78u8; 32]),
+			epoch: 102,
+			gen: 2023,
+			sender: nid::Nid::new(b"abcdef00", 9),
+			iv: aes_gcm::Iv([98u8; 12]),
+			sig: dilithium::Signature::new([30u8; 4595]),
+			mac: hmac::Digest([71u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let cti = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			sender: nid::Nid::new(b"abcdefgh", 0),
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rr = transport::ReceivedEdit {
+			prop,
+			cti: cti.clone(),
+			ctd,
+		};
+		let serialized = rr.serialize();
+		let deserialized = transport::ReceivedEdit::deserialize(&serialized);
 
 		assert_eq!(Ok(rr), deserialized);
 	}
