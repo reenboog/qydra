@@ -254,6 +254,14 @@ message SendRemove {
 	// commit & each prop is sent to commit.ctds.user_id
 	repeated Ciphertext props = 1;
 	required SendCommit commit = 2;
+	// if specified, this user LEFT, so a delegated REMOVE is required
+	// message Leave {
+	//	required bytes user_id = 1;
+	//	required bytes guid = 2;
+	//	required uint64 epoch = 3;
+	//	required bytes sig = 4; // signs all the fields above
+	// }
+	// optional Leave delegated_ctx = 3;
 }
 
 message Send {
@@ -324,11 +332,10 @@ message Received {
 	}
 }
 
-// // group meta information
+message Msg {
+	required bytes payload = 1;
+}
+
 // message GroupMeta {
-// 	optional string name = 1;
-// 	optional string description = 2;
-// 	// admin ids
-// 	repeated bytes admins = 3;
-// 	required bytes owner = 4;
+//	creator, name, description, owners, admin, etc
 // }

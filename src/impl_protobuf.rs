@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{
 	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hash, hpkencrypt, id,
-	key_package, key_schedule, member, nid, proposal, protocol, roster, secret_tree,
+	key_package, key_schedule, member, nid, proposal, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
-	treemath, update, welcome,
+	transport, treemath, update, welcome,
 };
 use prost::Message;
 
@@ -1052,8 +1052,8 @@ impl Deserializable for commit::CommitCtd {
 }
 
 // SendCommit
-impl From<&protocol::SendCommit> for SendCommit {
-	fn from(val: &protocol::SendCommit) -> Self {
+impl From<&transport::SendCommit> for SendCommit {
+	fn from(val: &transport::SendCommit) -> Self {
 		Self {
 			cti: (&val.cti).into(),
 			ctds: val.ctds.iter().map(|ctd| ctd.into()).collect(),
@@ -1061,13 +1061,13 @@ impl From<&protocol::SendCommit> for SendCommit {
 	}
 }
 
-impl Serializable for protocol::SendCommit {
+impl Serializable for transport::SendCommit {
 	fn serialize(&self) -> Vec<u8> {
 		SendCommit::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendCommit> for protocol::SendCommit {
+impl TryFrom<SendCommit> for transport::SendCommit {
 	type Error = Error;
 
 	fn try_from(val: SendCommit) -> Result<Self, Self::Error> {
@@ -1085,7 +1085,7 @@ impl TryFrom<SendCommit> for protocol::SendCommit {
 	}
 }
 
-impl Deserializable for protocol::SendCommit {
+impl Deserializable for transport::SendCommit {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1097,8 +1097,8 @@ impl Deserializable for protocol::SendCommit {
 }
 
 // SendAdd
-impl From<&protocol::SendAdd> for SendAdd {
-	fn from(val: &protocol::SendAdd) -> Self {
+impl From<&transport::SendAdd> for SendAdd {
+	fn from(val: &transport::SendAdd) -> Self {
 		Self {
 			props: val.props.iter().map(|p| p.into()).collect(),
 			commit: (&val.commit).into(),
@@ -1106,13 +1106,13 @@ impl From<&protocol::SendAdd> for SendAdd {
 	}
 }
 
-impl Serializable for protocol::SendAdd {
+impl Serializable for transport::SendAdd {
 	fn serialize(&self) -> Vec<u8> {
 		SendAdd::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendAdd> for protocol::SendAdd {
+impl TryFrom<SendAdd> for transport::SendAdd {
 	type Error = Error;
 
 	fn try_from(val: SendAdd) -> Result<Self, Self::Error> {
@@ -1125,13 +1125,13 @@ impl TryFrom<SendAdd> for protocol::SendAdd {
 						.or(Err(Error::BadCiphertextFormat))?)
 				})
 				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
-			commit: protocol::SendCommit::try_from(val.commit)
+			commit: transport::SendCommit::try_from(val.commit)
 				.or(Err(Error::BadSendCommitFormat))?,
 		})
 	}
 }
 
-impl Deserializable for protocol::SendAdd {
+impl Deserializable for transport::SendAdd {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1143,8 +1143,8 @@ impl Deserializable for protocol::SendAdd {
 }
 
 // SendInvite
-impl From<&protocol::SendInvite> for SendInvite {
-	fn from(val: &protocol::SendInvite) -> Self {
+impl From<&transport::SendInvite> for SendInvite {
+	fn from(val: &transport::SendInvite) -> Self {
 		Self {
 			wcti: (&val.wcti).into(),
 			wctds: val.wctds.iter().map(|w| w.into()).collect(),
@@ -1153,13 +1153,13 @@ impl From<&protocol::SendInvite> for SendInvite {
 	}
 }
 
-impl Serializable for protocol::SendInvite {
+impl Serializable for transport::SendInvite {
 	fn serialize(&self) -> Vec<u8> {
 		SendInvite::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendInvite> for protocol::SendInvite {
+impl TryFrom<SendInvite> for transport::SendInvite {
 	type Error = Error;
 
 	fn try_from(val: SendInvite) -> Result<Self, Self::Error> {
@@ -1174,13 +1174,13 @@ impl TryFrom<SendInvite> for protocol::SendInvite {
 				.collect::<Result<Vec<welcome::WlcmCtd>, Error>>()?,
 			add: val
 				.add
-				.map(|a| protocol::SendAdd::try_from(a))
+				.map(|a| transport::SendAdd::try_from(a))
 				.transpose()?,
 		})
 	}
 }
 
-impl Deserializable for protocol::SendInvite {
+impl Deserializable for transport::SendInvite {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1192,8 +1192,8 @@ impl Deserializable for protocol::SendInvite {
 }
 
 // SendRemove
-impl From<&protocol::SendRemove> for SendRemove {
-	fn from(val: &protocol::SendRemove) -> Self {
+impl From<&transport::SendRemove> for SendRemove {
+	fn from(val: &transport::SendRemove) -> Self {
 		Self {
 			props: val.props.iter().map(|p| p.into()).collect(),
 			commit: (&val.commit).into(),
@@ -1201,13 +1201,13 @@ impl From<&protocol::SendRemove> for SendRemove {
 	}
 }
 
-impl Serializable for protocol::SendRemove {
+impl Serializable for transport::SendRemove {
 	fn serialize(&self) -> Vec<u8> {
 		SendRemove::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendRemove> for protocol::SendRemove {
+impl TryFrom<SendRemove> for transport::SendRemove {
 	type Error = Error;
 
 	fn try_from(val: SendRemove) -> Result<Self, Self::Error> {
@@ -1220,13 +1220,13 @@ impl TryFrom<SendRemove> for protocol::SendRemove {
 						.or(Err(Error::BadCiphertextFormat))?)
 				})
 				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
-			commit: protocol::SendCommit::try_from(val.commit)
+			commit: transport::SendCommit::try_from(val.commit)
 				.or(Err(Error::BadSendCommitFormat))?,
 		})
 	}
 }
 
-impl Deserializable for protocol::SendRemove {
+impl Deserializable for transport::SendRemove {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1238,8 +1238,8 @@ impl Deserializable for protocol::SendRemove {
 }
 
 // SendEdit
-impl From<&protocol::SendEdit> for SendEdit {
-	fn from(val: &protocol::SendEdit) -> Self {
+impl From<&transport::SendEdit> for SendEdit {
+	fn from(val: &transport::SendEdit) -> Self {
 		Self {
 			prop: (&val.prop).into(),
 			commit: (&val.commit).into(),
@@ -1247,25 +1247,25 @@ impl From<&protocol::SendEdit> for SendEdit {
 	}
 }
 
-impl Serializable for protocol::SendEdit {
+impl Serializable for transport::SendEdit {
 	fn serialize(&self) -> Vec<u8> {
 		SendEdit::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendEdit> for protocol::SendEdit {
+impl TryFrom<SendEdit> for transport::SendEdit {
 	type Error = Error;
 
 	fn try_from(val: SendEdit) -> Result<Self, Self::Error> {
 		Ok(Self {
 			prop: val.prop.try_into().or(Err(Error::BadCiphertextFormat))?,
-			commit: protocol::SendCommit::try_from(val.commit)
+			commit: transport::SendCommit::try_from(val.commit)
 				.or(Err(Error::BadSendCommitFormat))?,
 		})
 	}
 }
 
-impl Deserializable for protocol::SendEdit {
+impl Deserializable for transport::SendEdit {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1277,8 +1277,8 @@ impl Deserializable for protocol::SendEdit {
 }
 
 // SendProposal
-impl From<&protocol::SendProposal> for SendProposal {
-	fn from(val: &protocol::SendProposal) -> Self {
+impl From<&transport::SendProposal> for SendProposal {
+	fn from(val: &transport::SendProposal) -> Self {
 		Self {
 			props: val.props.iter().map(|p| p.into()).collect(),
 			recipients: val
@@ -1290,13 +1290,13 @@ impl From<&protocol::SendProposal> for SendProposal {
 	}
 }
 
-impl Serializable for protocol::SendProposal {
+impl Serializable for transport::SendProposal {
 	fn serialize(&self) -> Vec<u8> {
 		SendProposal::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendProposal> for protocol::SendProposal {
+impl TryFrom<SendProposal> for transport::SendProposal {
 	type Error = Error;
 
 	fn try_from(val: SendProposal) -> Result<Self, Self::Error> {
@@ -1319,7 +1319,7 @@ impl TryFrom<SendProposal> for protocol::SendProposal {
 	}
 }
 
-impl Deserializable for protocol::SendProposal {
+impl Deserializable for transport::SendProposal {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1331,8 +1331,8 @@ impl Deserializable for protocol::SendProposal {
 }
 
 // SendMsg
-impl From<&protocol::SendMsg> for SendMsg {
-	fn from(val: &protocol::SendMsg) -> Self {
+impl From<&transport::SendMsg> for SendMsg {
+	fn from(val: &transport::SendMsg) -> Self {
 		Self {
 			payload: (&val.payload).into(),
 			recipients: val
@@ -1344,13 +1344,13 @@ impl From<&protocol::SendMsg> for SendMsg {
 	}
 }
 
-impl Serializable for protocol::SendMsg {
+impl Serializable for transport::SendMsg {
 	fn serialize(&self) -> Vec<u8> {
 		SendMsg::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<SendMsg> for protocol::SendMsg {
+impl TryFrom<SendMsg> for transport::SendMsg {
 	type Error = Error;
 
 	fn try_from(val: SendMsg) -> Result<Self, Self::Error> {
@@ -1366,7 +1366,7 @@ impl TryFrom<SendMsg> for protocol::SendMsg {
 	}
 }
 
-impl Deserializable for protocol::SendMsg {
+impl Deserializable for transport::SendMsg {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1378,35 +1378,35 @@ impl Deserializable for protocol::SendMsg {
 }
 
 // Send
-impl From<&protocol::Send> for Send {
-	fn from(val: &protocol::Send) -> Self {
+impl From<&transport::Send> for Send {
+	fn from(val: &transport::Send) -> Self {
 		use send::Variant;
 
 		Self {
 			variant: Some(match val {
-				protocol::Send::Invite(i) => Variant::Invite(SendInvite::from(i)),
-				protocol::Send::Remove(r) => Variant::Remove(SendRemove::from(r)),
-				protocol::Send::Edit(e) => Variant::Edit(SendEdit::from(e)),
-				protocol::Send::Props(p) => Variant::Props(SendProposal::from(p)),
-				protocol::Send::Commit(c) => Variant::Commit(SendCommit::from(c)),
-				protocol::Send::Msg(m) => Variant::Msg(SendMsg::from(m)),
+				transport::Send::Invite(i) => Variant::Invite(SendInvite::from(i)),
+				transport::Send::Remove(r) => Variant::Remove(SendRemove::from(r)),
+				transport::Send::Edit(e) => Variant::Edit(SendEdit::from(e)),
+				transport::Send::Props(p) => Variant::Props(SendProposal::from(p)),
+				transport::Send::Commit(c) => Variant::Commit(SendCommit::from(c)),
+				transport::Send::Msg(m) => Variant::Msg(SendMsg::from(m)),
 			}),
 		}
 	}
 }
 
-impl Serializable for protocol::Send {
+impl Serializable for transport::Send {
 	fn serialize(&self) -> Vec<u8> {
 		Send::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<Send> for protocol::Send {
+impl TryFrom<Send> for transport::Send {
 	type Error = Error;
 
 	fn try_from(val: Send) -> Result<Self, Self::Error> {
-		use protocol::Send::*;
 		use send::Variant;
+		use transport::Send::*;
 
 		Ok(match val.variant.ok_or(Error::BadSendFormat)? {
 			Variant::Invite(i) => Invite(i.try_into()?),
@@ -1419,7 +1419,7 @@ impl TryFrom<Send> for protocol::Send {
 	}
 }
 
-impl Deserializable for protocol::Send {
+impl Deserializable for transport::Send {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1490,8 +1490,8 @@ impl Deserializable for ciphertext::Ciphertext {
 }
 
 // ReceivedWelcome
-impl From<&protocol::ReceivedWelcome> for ReceivedWelcome {
-	fn from(val: &protocol::ReceivedWelcome) -> Self {
+impl From<&transport::ReceivedWelcome> for ReceivedWelcome {
+	fn from(val: &transport::ReceivedWelcome) -> Self {
 		Self {
 			cti: (&val.cti).into(),
 			ctd: (&val.ctd).into(),
@@ -1500,13 +1500,13 @@ impl From<&protocol::ReceivedWelcome> for ReceivedWelcome {
 	}
 }
 
-impl Serializable for protocol::ReceivedWelcome {
+impl Serializable for transport::ReceivedWelcome {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedWelcome::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedWelcome> for protocol::ReceivedWelcome {
+impl TryFrom<ReceivedWelcome> for transport::ReceivedWelcome {
 	type Error = Error;
 
 	fn try_from(val: ReceivedWelcome) -> Result<Self, Self::Error> {
@@ -1518,7 +1518,7 @@ impl TryFrom<ReceivedWelcome> for protocol::ReceivedWelcome {
 	}
 }
 
-impl Deserializable for protocol::ReceivedWelcome {
+impl Deserializable for transport::ReceivedWelcome {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1530,8 +1530,8 @@ impl Deserializable for protocol::ReceivedWelcome {
 }
 
 // ReceivedCommit
-impl From<&protocol::ReceivedCommit> for ReceivedCommit {
-	fn from(val: &protocol::ReceivedCommit) -> Self {
+impl From<&transport::ReceivedCommit> for ReceivedCommit {
+	fn from(val: &transport::ReceivedCommit) -> Self {
 		Self {
 			cti: (&val.cti).into(),
 			ctd: (&val.ctd).into(),
@@ -1539,13 +1539,13 @@ impl From<&protocol::ReceivedCommit> for ReceivedCommit {
 	}
 }
 
-impl Serializable for protocol::ReceivedCommit {
+impl Serializable for transport::ReceivedCommit {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedCommit::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedCommit> for protocol::ReceivedCommit {
+impl TryFrom<ReceivedCommit> for transport::ReceivedCommit {
 	type Error = Error;
 
 	fn try_from(val: ReceivedCommit) -> Result<Self, Self::Error> {
@@ -1556,7 +1556,7 @@ impl TryFrom<ReceivedCommit> for protocol::ReceivedCommit {
 	}
 }
 
-impl Deserializable for protocol::ReceivedCommit {
+impl Deserializable for transport::ReceivedCommit {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1568,21 +1568,21 @@ impl Deserializable for protocol::ReceivedCommit {
 }
 
 // ReceivedProposal
-impl From<&protocol::ReceivedProposal> for ReceivedProposal {
-	fn from(val: &protocol::ReceivedProposal) -> Self {
+impl From<&transport::ReceivedProposal> for ReceivedProposal {
+	fn from(val: &transport::ReceivedProposal) -> Self {
 		Self {
 			props: val.props.iter().map(|p| p.into()).collect(),
 		}
 	}
 }
 
-impl Serializable for protocol::ReceivedProposal {
+impl Serializable for transport::ReceivedProposal {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedProposal::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedProposal> for protocol::ReceivedProposal {
+impl TryFrom<ReceivedProposal> for transport::ReceivedProposal {
 	type Error = Error;
 
 	fn try_from(val: ReceivedProposal) -> Result<Self, Self::Error> {
@@ -1599,7 +1599,7 @@ impl TryFrom<ReceivedProposal> for protocol::ReceivedProposal {
 	}
 }
 
-impl Deserializable for protocol::ReceivedProposal {
+impl Deserializable for transport::ReceivedProposal {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1611,8 +1611,8 @@ impl Deserializable for protocol::ReceivedProposal {
 }
 
 // ReceivedAdd
-impl From<&protocol::ReceivedAdd> for ReceivedAdd {
-	fn from(val: &protocol::ReceivedAdd) -> Self {
+impl From<&transport::ReceivedAdd> for ReceivedAdd {
+	fn from(val: &transport::ReceivedAdd) -> Self {
 		Self {
 			props: (&val.props).into(),
 			commit: (&val.commit).into(),
@@ -1620,13 +1620,13 @@ impl From<&protocol::ReceivedAdd> for ReceivedAdd {
 	}
 }
 
-impl Serializable for protocol::ReceivedAdd {
+impl Serializable for transport::ReceivedAdd {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedAdd::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedAdd> for protocol::ReceivedAdd {
+impl TryFrom<ReceivedAdd> for transport::ReceivedAdd {
 	type Error = Error;
 
 	fn try_from(val: ReceivedAdd) -> Result<Self, Self::Error> {
@@ -1643,7 +1643,7 @@ impl TryFrom<ReceivedAdd> for protocol::ReceivedAdd {
 	}
 }
 
-impl Deserializable for protocol::ReceivedAdd {
+impl Deserializable for transport::ReceivedAdd {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1655,8 +1655,8 @@ impl Deserializable for protocol::ReceivedAdd {
 }
 
 // ReceivedRemove
-impl From<&protocol::ReceivedRemove> for ReceivedRemove {
-	fn from(val: &protocol::ReceivedRemove) -> Self {
+impl From<&transport::ReceivedRemove> for ReceivedRemove {
+	fn from(val: &transport::ReceivedRemove) -> Self {
 		Self {
 			props: (&val.props).into(),
 			cti: (&val.cti).into(),
@@ -1665,13 +1665,13 @@ impl From<&protocol::ReceivedRemove> for ReceivedRemove {
 	}
 }
 
-impl Serializable for protocol::ReceivedRemove {
+impl Serializable for transport::ReceivedRemove {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedRemove::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedRemove> for protocol::ReceivedRemove {
+impl TryFrom<ReceivedRemove> for transport::ReceivedRemove {
 	type Error = Error;
 
 	fn try_from(val: ReceivedRemove) -> Result<Self, Self::Error> {
@@ -1686,7 +1686,7 @@ impl TryFrom<ReceivedRemove> for protocol::ReceivedRemove {
 	}
 }
 
-impl Deserializable for protocol::ReceivedRemove {
+impl Deserializable for transport::ReceivedRemove {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1698,8 +1698,8 @@ impl Deserializable for protocol::ReceivedRemove {
 }
 
 // ReceivedEdit
-impl From<&protocol::ReceivedEdit> for ReceivedEdit {
-	fn from(val: &protocol::ReceivedEdit) -> Self {
+impl From<&transport::ReceivedEdit> for ReceivedEdit {
+	fn from(val: &transport::ReceivedEdit) -> Self {
 		Self {
 			prop: (&val.prop).into(),
 			cti: (&val.cti).into(),
@@ -1708,13 +1708,13 @@ impl From<&protocol::ReceivedEdit> for ReceivedEdit {
 	}
 }
 
-impl Serializable for protocol::ReceivedEdit {
+impl Serializable for transport::ReceivedEdit {
 	fn serialize(&self) -> Vec<u8> {
 		ReceivedEdit::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<ReceivedEdit> for protocol::ReceivedEdit {
+impl TryFrom<ReceivedEdit> for transport::ReceivedEdit {
 	type Error = Error;
 
 	fn try_from(val: ReceivedEdit) -> Result<Self, Self::Error> {
@@ -1729,7 +1729,7 @@ impl TryFrom<ReceivedEdit> for protocol::ReceivedEdit {
 	}
 }
 
-impl Deserializable for protocol::ReceivedEdit {
+impl Deserializable for transport::ReceivedEdit {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1741,36 +1741,36 @@ impl Deserializable for protocol::ReceivedEdit {
 }
 
 // Received
-impl From<&protocol::Received> for Received {
-	fn from(val: &protocol::Received) -> Self {
+impl From<&transport::Received> for Received {
+	fn from(val: &transport::Received) -> Self {
 		use received::Variant;
 
 		Self {
 			variant: Some(match val {
-				protocol::Received::Welcome(w) => Variant::Wlcm(w.into()),
-				protocol::Received::Add(a) => Variant::Add(a.into()),
-				protocol::Received::Remove(r) => Variant::Remove(r.into()),
-				protocol::Received::Edit(e) => Variant::Edit(e.into()),
-				protocol::Received::Props(p) => Variant::Props(p.into()),
-				protocol::Received::Commit(c) => Variant::Commit(c.into()),
-				protocol::Received::Msg(m) => Variant::Msg(m.into()),
+				transport::Received::Welcome(w) => Variant::Wlcm(w.into()),
+				transport::Received::Add(a) => Variant::Add(a.into()),
+				transport::Received::Remove(r) => Variant::Remove(r.into()),
+				transport::Received::Edit(e) => Variant::Edit(e.into()),
+				transport::Received::Props(p) => Variant::Props(p.into()),
+				transport::Received::Commit(c) => Variant::Commit(c.into()),
+				transport::Received::Msg(m) => Variant::Msg(m.into()),
 			}),
 		}
 	}
 }
 
-impl Serializable for protocol::Received {
+impl Serializable for transport::Received {
 	fn serialize(&self) -> Vec<u8> {
 		Received::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<Received> for protocol::Received {
+impl TryFrom<Received> for transport::Received {
 	type Error = Error;
 
 	fn try_from(val: Received) -> Result<Self, Self::Error> {
-		use protocol::Received::*;
 		use received::Variant;
+		use transport::Received::*;
 
 		Ok(match val.variant.ok_or(Error::BadReceivedFormat)? {
 			Variant::Wlcm(w) => Welcome(w.try_into()?),
@@ -1784,7 +1784,7 @@ impl TryFrom<Received> for protocol::Received {
 	}
 }
 
-impl Deserializable for protocol::Received {
+impl Deserializable for transport::Received {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -1799,10 +1799,9 @@ impl Deserializable for protocol::Received {
 mod tests {
 	use crate::{
 		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hmac, hpkencrypt, id,
-		key_package, key_schedule, member, nid, proposal, protocol, reuse_guard, roster,
-		secret_tree,
+		key_package, key_schedule, member, nid, proposal, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
-		treemath, update, welcome, x448,
+		transport, treemath, update, welcome, x448,
 	};
 
 	#[test]
@@ -2220,7 +2219,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti,
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2242,12 +2241,12 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sa = protocol::SendAdd {
+		let sa = transport::SendAdd {
 			props: vec![prop],
 			commit: sc,
 		};
 		let serialized = sa.serialize();
-		let deserialized = protocol::SendAdd::deserialize(&serialized);
+		let deserialized = transport::SendAdd::deserialize(&serialized);
 
 		assert_eq!(Ok(sa), deserialized);
 	}
@@ -2266,7 +2265,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti,
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2288,12 +2287,12 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sr = protocol::SendRemove {
+		let sr = transport::SendRemove {
 			props: vec![prop],
 			commit: sc,
 		};
 		let serialized = sr.serialize();
-		let deserialized = protocol::SendRemove::deserialize(&serialized);
+		let deserialized = transport::SendRemove::deserialize(&serialized);
 
 		assert_eq!(Ok(sr), deserialized);
 	}
@@ -2312,7 +2311,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti,
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2334,7 +2333,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sa = protocol::SendAdd {
+		let sa = transport::SendAdd {
 			props: vec![prop],
 			commit: sc,
 		};
@@ -2347,13 +2346,13 @@ mod tests {
 		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
-		let si = protocol::SendInvite {
+		let si = transport::SendInvite {
 			wcti,
 			wctds: vec![wctd],
 			add: Some(sa),
 		};
 		let serialized = si.serialize();
-		let deserialized = protocol::SendInvite::deserialize(&serialized);
+		let deserialized = transport::SendInvite::deserialize(&serialized);
 
 		assert_eq!(Ok(si), deserialized);
 	}
@@ -2372,12 +2371,12 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sp = protocol::SendProposal {
+		let sp = transport::SendProposal {
 			props: vec![prop],
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
 		let serialized = sp.serialize();
-		let deserialized = protocol::SendProposal::deserialize(&serialized);
+		let deserialized = transport::SendProposal::deserialize(&serialized);
 
 		assert_eq!(Ok(sp), deserialized);
 	}
@@ -2396,12 +2395,12 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sm = protocol::SendMsg {
+		let sm = transport::SendMsg {
 			payload: ct,
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
 		let serialized = sm.serialize();
-		let deserialized = protocol::SendMsg::deserialize(&serialized);
+		let deserialized = transport::SendMsg::deserialize(&serialized);
 
 		assert_eq!(Ok(sm), deserialized);
 	}
@@ -2420,7 +2419,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti: cti.clone(),
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2442,7 +2441,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sa = protocol::SendAdd {
+		let sa = transport::SendAdd {
 			props: vec![prop.clone()],
 			commit: sc.clone(),
 		};
@@ -2455,40 +2454,40 @@ mod tests {
 		let wcti = welcome::WlcmCti::new(cmpd_cti, dilithium::Signature::new([57u8; 4595]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
-		let si = protocol::SendInvite {
+		let si = transport::SendInvite {
 			wcti,
 			wctds: vec![wctd],
 			add: Some(sa),
 		};
-		let send = protocol::Send::Invite(si);
+		let send = transport::Send::Invite(si);
 		let serialied = send.serialize();
-		let deserialized = protocol::Send::deserialize(&serialied);
+		let deserialized = transport::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
 
-		let sr = protocol::SendRemove {
+		let sr = transport::SendRemove {
 			props: vec![prop.clone()],
 			commit: sc,
 		};
 
-		let send = protocol::Send::Remove(sr);
+		let send = transport::Send::Remove(sr);
 		let serialied = send.serialize();
-		let deserialized = protocol::Send::deserialize(&serialied);
+		let deserialized = transport::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
 
-		let sp = protocol::SendProposal {
+		let sp = transport::SendProposal {
 			props: vec![prop],
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
 
-		let send = protocol::Send::Props(sp);
+		let send = transport::Send::Props(sp);
 		let serialied = send.serialize();
-		let deserialized = protocol::Send::deserialize(&serialied);
+		let deserialized = transport::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
 
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti: cti.clone(),
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2499,20 +2498,20 @@ mod tests {
 			],
 		};
 
-		let send = protocol::Send::Commit(sc);
+		let send = transport::Send::Commit(sc);
 		let serialied = send.serialize();
-		let deserialized = protocol::Send::deserialize(&serialied);
+		let deserialized = transport::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
 
-		let sm = protocol::SendMsg {
+		let sm = transport::SendMsg {
 			payload: cti,
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
 
-		let send = protocol::Send::Msg(sm);
+		let send = transport::Send::Msg(sm);
 		let serialied = send.serialize();
-		let deserialized = protocol::Send::deserialize(&serialied);
+		let deserialized = transport::Send::deserialize(&serialied);
 
 		assert_eq!(Ok(send), deserialized);
 	}
@@ -2606,7 +2605,7 @@ mod tests {
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let sc = protocol::SendCommit {
+		let sc = transport::SendCommit {
 			cti,
 			ctds: vec![
 				commit::CommitCtd::new(
@@ -2617,7 +2616,7 @@ mod tests {
 			],
 		};
 		let serialized = sc.serialize();
-		let deserialized = protocol::SendCommit::deserialize(&serialized);
+		let deserialized = transport::SendCommit::deserialize(&serialized);
 
 		assert_eq!(Ok(sc), deserialized);
 	}
@@ -2632,13 +2631,13 @@ mod tests {
 		);
 		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let wlcm = protocol::ReceivedWelcome {
+		let wlcm = transport::ReceivedWelcome {
 			cti,
 			ctd,
 			kp_id: id::Id([88u8; 32]),
 		};
 		let serialized = wlcm.serialize();
-		let deserialized = protocol::ReceivedWelcome::deserialize(&serialized);
+		let deserialized = transport::ReceivedWelcome::deserialize(&serialized);
 
 		assert_eq!(Ok(wlcm), deserialized);
 	}
@@ -2658,9 +2657,9 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let rc = protocol::ReceivedCommit { cti, ctd };
+		let rc = transport::ReceivedCommit { cti, ctd };
 		let serialized = rc.serialize();
-		let deserialized = protocol::ReceivedCommit::deserialize(&serialized);
+		let deserialized = transport::ReceivedCommit::deserialize(&serialized);
 
 		assert_eq!(Ok(rc), deserialized);
 	}
@@ -2691,11 +2690,11 @@ mod tests {
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let rp = protocol::ReceivedProposal {
+		let rp = transport::ReceivedProposal {
 			props: vec![ct0, ct1],
 		};
 		let serialized = rp.serialize();
-		let deserialized = protocol::ReceivedProposal::deserialize(&serialized);
+		let deserialized = transport::ReceivedProposal::deserialize(&serialized);
 
 		assert_eq!(Ok(rp), deserialized);
 	}
@@ -2714,7 +2713,7 @@ mod tests {
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let rp = protocol::ReceivedProposal { props: vec![ct] };
+		let rp = transport::ReceivedProposal { props: vec![ct] };
 		let cti = ciphertext::Ciphertext {
 			content_id: id::Id([12u8; 32]),
 			payload: vec![11, 22, 33, 44, 55, 66, 77, 88, 99, 0],
@@ -2728,13 +2727,13 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let rc = protocol::ReceivedCommit { cti, ctd };
-		let ra = protocol::ReceivedAdd {
+		let rc = transport::ReceivedCommit { cti, ctd };
+		let ra = transport::ReceivedAdd {
 			props: rp,
 			commit: rc,
 		};
 		let serialized = ra.serialize();
-		let deserialized = protocol::ReceivedAdd::deserialize(&serialized);
+		let deserialized = transport::ReceivedAdd::deserialize(&serialized);
 
 		assert_eq!(Ok(ra), deserialized);
 	}
@@ -2753,7 +2752,7 @@ mod tests {
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let rp = protocol::ReceivedProposal { props: vec![ct] };
+		let rp = transport::ReceivedProposal { props: vec![ct] };
 		let cti = ciphertext::Ciphertext {
 			content_id: id::Id([12u8; 32]),
 			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
@@ -2767,23 +2766,23 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let rr = protocol::ReceivedRemove {
+		let rr = transport::ReceivedRemove {
 			props: rp.clone(),
 			cti: cti.clone(),
 			ctd: Some(ctd),
 		};
 		let serialized = rr.serialize();
-		let deserialized = protocol::ReceivedRemove::deserialize(&serialized);
+		let deserialized = transport::ReceivedRemove::deserialize(&serialized);
 
 		assert_eq!(Ok(rr), deserialized);
 
-		let rr = protocol::ReceivedRemove {
+		let rr = transport::ReceivedRemove {
 			props: rp,
 			cti,
 			ctd: None,
 		};
 		let serialized = rr.serialize();
-		let deserialized = protocol::ReceivedRemove::deserialize(&serialized);
+		let deserialized = transport::ReceivedRemove::deserialize(&serialized);
 
 		assert_eq!(Ok(rr), deserialized);
 	}
@@ -2798,14 +2797,14 @@ mod tests {
 		);
 		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let wlcm = protocol::ReceivedWelcome {
+		let wlcm = transport::ReceivedWelcome {
 			cti,
 			ctd,
 			kp_id: id::Id([88u8; 32]),
 		};
-		let rcvd = protocol::Received::Welcome(wlcm);
+		let rcvd = transport::Received::Welcome(wlcm);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 
@@ -2822,22 +2821,22 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let rc = protocol::ReceivedCommit {
+		let rc = transport::ReceivedCommit {
 			cti: cti.clone(),
 			ctd,
 		};
-		let rcvd = protocol::Received::Commit(rc);
+		let rcvd = transport::Received::Commit(rc);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 
-		let rp = protocol::ReceivedProposal {
+		let rp = transport::ReceivedProposal {
 			props: vec![cti.clone()],
 		};
-		let rcvd = protocol::Received::Props(rp);
+		let rcvd = transport::Received::Props(rp);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 
@@ -2853,40 +2852,40 @@ mod tests {
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
-		let rp = protocol::ReceivedProposal {
+		let rp = transport::ReceivedProposal {
 			props: vec![ct.clone()],
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
-		let rc = protocol::ReceivedCommit {
+		let rc = transport::ReceivedCommit {
 			cti: cti.clone(),
 			ctd: ctd.clone(),
 		};
-		let ra = protocol::ReceivedAdd {
+		let ra = transport::ReceivedAdd {
 			props: rp.clone(),
 			commit: rc,
 		};
 
-		let rcvd = protocol::Received::Add(ra);
+		let rcvd = transport::Received::Add(ra);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 
-		let rr = protocol::ReceivedRemove {
+		let rr = transport::ReceivedRemove {
 			props: rp,
 			cti: cti.clone(),
 			ctd: Some(ctd),
 		};
 
-		let rcvd = protocol::Received::Remove(rr);
+		let rcvd = transport::Received::Remove(rr);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 
-		let rcvd = protocol::Received::Msg(ct);
+		let rcvd = transport::Received::Msg(ct);
 		let serialized = rcvd.serialize();
-		let deserialized = protocol::Received::deserialize(&serialized);
+		let deserialized = transport::Received::deserialize(&serialized);
 
 		assert_eq!(Ok(rcvd), deserialized);
 	}

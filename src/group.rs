@@ -304,7 +304,7 @@ impl Group {
 		(fp, ct)
 	}
 
-	fn encrypt<T>(&mut self, pt: &T, content_type: ContentType) -> Ciphertext
+	pub fn encrypt<T>(&mut self, pt: &T, content_type: ContentType) -> Ciphertext
 	where
 		T: Identifiable + Serializable,
 	{
@@ -1089,7 +1089,7 @@ mod tests {
 	use super::{Error, Group, Owner};
 	use crate::{
 		ciphertext::ContentType, commit::FramedCommit, dilithium, key_package::KeyPackage,
-		nid::Nid, proposal::FramedProposal, x448,
+		msg::Msg, nid::Nid, proposal::FramedProposal, x448,
 	};
 
 	#[test]
@@ -1296,6 +1296,31 @@ mod tests {
 		);
 		assert_eq!(charlie_group.secrets, bob_group.secrets);
 
+		for idx in 0u8..20 {
+			let a = Msg(vec![1, 2, 3, idx]);
+			let b = Msg(vec![5, 6, 7, idx]);
+			let c = Msg(vec![8, 9, 0, idx]);
+			let ma = alice_group.encrypt(&a, ContentType::Msg);
+			let mb = bob_group.encrypt(&b, ContentType::Msg);
+			let mc = charlie_group.encrypt(&c, ContentType::Msg);
+
+			assert_eq!(
+				Ok(a.clone()),
+				bob_group.decrypt(ma.clone(), ContentType::Msg)
+			);
+			assert_eq!(Ok(a.clone()), charlie_group.decrypt(ma, ContentType::Msg));
+			assert_eq!(
+				Ok(b.clone()),
+				alice_group.decrypt(mb.clone(), ContentType::Msg)
+			);
+			assert_eq!(Ok(b.clone()), charlie_group.decrypt(mb, ContentType::Msg));
+			assert_eq!(
+				Ok(c.clone()),
+				alice_group.decrypt(mc.clone(), ContentType::Msg)
+			);
+			assert_eq!(Ok(c.clone()), bob_group.decrypt(mc, ContentType::Msg));
+		}
+
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
 		let (edit_prop, _) = alice_group.propose_edit(b"v2");
 		let (update_charlie_prop, _) = charlie_group.propose_update();
@@ -1461,6 +1486,90 @@ mod tests {
 			Err(Error::FailedToDeriveChainTreeKey),
 			alice_group.decrypt::<FramedProposal>(ct, ContentType::Propose)
 		);
+	}
+
+	#[test]
+	fn test_encrypt_decrypt() {
+		let seed = [12u8; 16];
+		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_x448_kp = x448::KeyPair::generate();
+		let alice_skp = dilithium::KeyPair::generate();
+		let alice_id = Nid::new(b"aliceali", 0);
+		let alice = Owner {
+			id: alice_id.clone(),
+			kp: KeyPackage::new(
+				&alice_ekp.pk,
+				&alice_x448_kp.public,
+				&alice_skp.public,
+				&alice_skp.private,
+			),
+			ilum_dk: alice_ekp.sk,
+			x448_dk: alice_x448_kp.private,
+			ssk: alice_skp.private,
+		};
+
+		let mut alice_group = Group::create(seed, alice);
+
+		let bob_user_id = Nid::new(b"bobbobbo", 0);
+		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_x448_kp = x448::KeyPair::generate();
+		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_kp = KeyPackage::new(
+			&bob_user_ekp.pk,
+			&bob_x448_kp.public,
+			&bob_user_skp.public,
+			&bob_user_skp.private,
+		);
+		let (add_bob_prop, _) = alice_group
+			.propose_add(bob_user_id, bob_user_kp.clone())
+			.unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		let (edit_prop, _) = alice_group.propose_edit(b"v1");
+		// alice invites using her initial group
+		let (fc, _, ctds, wlcms) = alice_group
+			.commit(&[
+				add_bob_prop.clone(),
+				update_alice_prop.clone(),
+				edit_prop.clone(),
+			])
+			.unwrap();
+
+		// and get alice_group
+		let mut alice_group = alice_group
+			.process(
+				&fc,
+				ctds.first().unwrap().ctd.as_ref(),
+				&[add_bob_prop, edit_prop, update_alice_prop],
+			)
+			.unwrap()
+			.unwrap();
+
+		// bob joins
+		let mut bob_group = Group::join(
+			&bob_user_id,
+			&bob_user_kp,
+			&bob_user_ekp.sk,
+			&bob_x448_kp.private,
+			&bob_user_skp.private,
+			&seed,
+			&wlcms.clone().unwrap().0,
+			&wlcms.unwrap().1.get(0).unwrap().ctd,
+		)
+		.unwrap();
+
+		for idx in 0u8..20 {
+			let a = Msg(vec![1, 2, 3, idx]);
+			let b = Msg(vec![5, 6, 7, idx]);
+
+			assert_eq!(
+				Ok(a.clone()),
+				bob_group.decrypt(alice_group.encrypt(&a, ContentType::Msg), ContentType::Msg)
+			);
+			assert_eq!(
+				Ok(b.clone()),
+				alice_group.decrypt(bob_group.encrypt(&b, ContentType::Msg), ContentType::Msg)
+			);
+		}
 	}
 
 	#[test]
