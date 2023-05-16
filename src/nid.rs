@@ -20,6 +20,11 @@ impl Nid {
 		// TODO: replace with a CID-based implementation & respect case (in)sensitivity
 		[self.id.as_slice(), &[self.node]].concat()
 	}
+
+	// is this the same account, but different device? CIDs currently are represented by strings, so case is to be respected
+	pub fn is_same_id(&self, nid: &Nid) -> bool {
+		self.id == nid.id
+	}
 }
 
 impl TryFrom<Vec<u8>> for Nid {

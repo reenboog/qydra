@@ -1118,7 +1118,10 @@ impl TryFrom<SendLeave> for transport::SendLeave {
 
 	fn try_from(val: SendLeave) -> Result<Self, Self::Error> {
 		Ok(Self {
-			farewell: val.farewell.try_into().or(Err(Error::BadCiphertextFormat))?,
+			farewell: val
+				.farewell
+				.try_into()
+				.or(Err(Error::BadCiphertextFormat))?,
 		})
 	}
 }
@@ -1235,6 +1238,7 @@ impl From<&transport::SendRemove> for SendRemove {
 		Self {
 			props: val.props.iter().map(|p| p.into()).collect(),
 			commit: (&val.commit).into(),
+			delegated: val.delegated,
 		}
 	}
 }
@@ -1260,6 +1264,7 @@ impl TryFrom<SendRemove> for transport::SendRemove {
 				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
 			commit: transport::SendCommit::try_from(val.commit)
 				.or(Err(Error::BadSendCommitFormat))?,
+			delegated: val.delegated,
 		})
 	}
 }
@@ -1701,6 +1706,7 @@ impl From<&transport::ReceivedRemove> for ReceivedRemove {
 			props: (&val.props).into(),
 			cti: (&val.cti).into(),
 			ctd: val.ctd.as_ref().map(|ctd| ctd.into()),
+			delegated: val.delegated,
 		}
 	}
 }
@@ -1722,6 +1728,7 @@ impl TryFrom<ReceivedRemove> for transport::ReceivedRemove {
 				.or(Err(Error::BadReceivedProposalFormat))?,
 			cti: val.cti.try_into().or(Err(Error::BadCiphertextFormat))?,
 			ctd: val.ctd.map(|ctd| ctd.try_into()).transpose()?,
+			delegated: val.delegated,
 		})
 	}
 }
@@ -2332,6 +2339,7 @@ mod tests {
 		let sr = transport::SendRemove {
 			props: vec![prop],
 			commit: sc,
+			delegated: true,
 		};
 		let serialized = sr.serialize();
 		let deserialized = transport::SendRemove::deserialize(&serialized);
@@ -2487,9 +2495,7 @@ mod tests {
 			payload: ct,
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
-		let sl = transport::SendLeave {
-			farewell: sm,
-		};
+		let sl = transport::SendLeave { farewell: sm };
 		let serialized = sl.serialize();
 		let deserialized = transport::SendLeave::deserialize(&serialized);
 
@@ -2583,6 +2589,7 @@ mod tests {
 		let sr = transport::SendRemove {
 			props: vec![prop.clone()],
 			commit: sc,
+			delegated: false,
 		};
 
 		let send = transport::Send::Remove(sr);
@@ -2885,6 +2892,7 @@ mod tests {
 			props: rp.clone(),
 			cti: cti.clone(),
 			ctd: Some(ctd),
+			delegated: true,
 		};
 		let serialized = rr.serialize();
 		let deserialized = transport::ReceivedRemove::deserialize(&serialized);
@@ -2895,6 +2903,7 @@ mod tests {
 			props: rp,
 			cti,
 			ctd: None,
+			delegated: false,
 		};
 		let serialized = rr.serialize();
 		let deserialized = transport::ReceivedRemove::deserialize(&serialized);
@@ -3028,6 +3037,7 @@ mod tests {
 			props: rp,
 			cti: cti.clone(),
 			ctd: Some(ctd),
+			delegated: true,
 		};
 
 		let rcvd = transport::Received::Remove(rr);

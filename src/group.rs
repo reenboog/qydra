@@ -63,7 +63,7 @@ pub enum Error {
 	// I received my own update, validation passed, but no prestored (ssk, dk) pair was found which makes no sense
 	NoPendingUpdateFound,
 	// validation resulted with an empty proposal list
-	EmptyPropsList,
+	PropsListEmptyOrInvalid,
 	// this key was either used, or too many were skipped
 	FailedToDeriveChainTreeKey,
 	// failed to aes-decrypt a hs (prop, commit) or app message
@@ -72,6 +72,8 @@ pub enum Error {
 	BadContentFormat,
 	// no ctd was supplied, but the receiver is not being removed
 	NoCdtSupplied,
+	// no need to change description, if it's the same
+	SameDescription,
 }
 
 // group state
@@ -265,10 +267,17 @@ impl Group {
 		)
 	}
 
-	pub fn propose_edit(&mut self, description: &[u8]) -> (FramedProposal, Ciphertext) {
-		self.frame_proposal(Proposal::Edit {
-			description: description.to_vec(),
-		})
+	pub fn propose_edit(
+		&mut self,
+		description: &[u8],
+	) -> Result<(FramedProposal, Ciphertext), Error> {
+		if self.description == description {
+			Err(Error::SameDescription)
+		} else {
+			Ok(self.frame_proposal(Proposal::Edit {
+				description: description.to_vec(),
+			}))
+		}
 	}
 
 	pub fn propose_add(
@@ -1018,7 +1027,7 @@ impl Group {
 
 		if diff.removed.is_empty() && diff.updated.is_empty() && diff.added.is_empty() {
 			// an empty list does not generate new state, so throw
-			Err(Error::EmptyPropsList)
+			Err(Error::PropsListEmptyOrInvalid)
 		} else {
 			Ok((new, diff, fps))
 		}
@@ -1149,7 +1158,7 @@ mod tests {
 			.propose_add(bob_user_id, bob_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
-		let (edit_prop, _) = alice_group.propose_edit(b"v1");
+		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
 		// alice invites using her initial group
 		let (fc, _, ctds, wlcms) = alice_group
 			.commit(&[
@@ -1322,7 +1331,7 @@ mod tests {
 		}
 
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
-		let (edit_prop, _) = alice_group.propose_edit(b"v2");
+		let (edit_prop, _) = alice_group.propose_edit(b"v2").unwrap();
 		let (update_charlie_prop, _) = charlie_group.propose_update();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (fc, fc_ct, ctds, wlcms) = bob_group
@@ -1524,7 +1533,7 @@ mod tests {
 			.propose_add(bob_user_id, bob_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
-		let (edit_prop, _) = alice_group.propose_edit(b"v1");
+		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
 		// alice invites using her initial group
 		let (fc, _, ctds, wlcms) = alice_group
 			.commit(&[

@@ -60,7 +60,7 @@
 	1 send a Leave proposal
 	2 recipients would always check if it's a Leave proposal and mark the sender as PENDING_REMOVE
 	2.1 if it's my device, quit immediately and do nothing
-	3 during on of the subsequent update commits, remove this user entirely: propose an update + remove and then commit
+	3 during on of the subsequent update commits, remove this user entirely: instead of commit, send SendRemove. It'll ignore some updates, but it's ok
 	4 given the commit from 3 will be added to the end of the queue, handle future-agnostic removes in case, the user is re-added before the commit:
 		if this node has ever been added afterwards, mark it as non PENDING_LEAVE, so that the check will fail
 
@@ -73,13 +73,13 @@
 
 */
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
 use crate::{
 	ciphertext::{Ciphertext, ContentType},
-	commit::CommitCtd,
+	commit::{CommitCtd, FramedCommit},
 	dilithium::{self},
 	group::{self, Group, Owner},
 	hash::{self, Hashable},
@@ -88,7 +88,7 @@ use crate::{
 	key_package::KeyPackage,
 	msg::Msg,
 	nid::Nid,
-	proposal::FramedProposal,
+	proposal::{FramedProposal, Proposal},
 	serializable::{Deserializable, Serializable},
 	transport,
 };
@@ -100,11 +100,29 @@ pub const ILUM_SEED: &[u8; 16] =
 #[derive(Debug)]
 pub enum Error {
 	FailedToCreate,
+	// the app is locked, retry later
 	DbLocked,
 	KeyPackageNotFound(Id),
 	GroupAlreadyExists(Id),
 	NoGroupFound(Id),
 	GroupCantBeEmpty,
+	// there's no way to process and recover from this; REINIT
+	TooNewEpoch {
+		epoch: u64,
+		current: u64,
+	},
+	// decryption failure
+	FailedToDecrypt {
+		id: Id,
+		content_type: ContentType,
+		sender: Nid,
+		guid: Id,
+		epoch: u64,
+	},
+	// should never happend
+	FailedToProcessOwnCommit {
+		ctx: String,
+	},
 }
 
 impl From<group::Error> for Error {
@@ -134,12 +152,28 @@ pub enum Incoming {}
 
 #[async_trait]
 pub trait Storage {
+	// TODO: all save_ functions should check for duplicates
 	// a log of message ids should be stored locally to ensure no duplicate is processed twice
 	async fn should_process_rcvd(&self, id: Id) -> bool;
+	async fn mark_rcvd_as_processed(&self, id: Id);
+
 	// TODO: could it be sufficient to represent user identity as a signing key?
-	async fn save_group(&self, group: &[u8], uid: &[u8], epoch: u64, roster: Vec<&[u8]>);
-	async fn save_proposal(&self, guid: Id, prop: &[u8]);
-	async fn get_group(&self, uid: &[u8], epoch: u64) -> Result<Group, Error>;
+	async fn save_group(&self, group: &Group, uid: &Id, epoch: u64, roster: Vec<&Nid>);
+	// delete all epochs for this group, all framed commits, all pending_remove-s
+	async fn delete_group(&self, uid: &Id);
+
+	// gets all nids for the specified nid; useful in case a device is added/remove between the tasks
+	async fn get_nids_for_nid(&self, nid: &Nid) -> Result<Vec<Nid>, Error>;
+
+	async fn save_prop(&self, prop: &FramedProposal, id: Id);
+	async fn get_prop(&self, id: Id) -> Result<FramedProposal, Error>;
+
+	async fn save_commit(&self, commit: &FramedCommit, id: Id);
+	async fn get_commit(&self, id: Id) -> Result<FramedCommit, Error>;
+
+	// async fn save_proposal(&self, guid: Id, prop: &[u8]);
+	async fn mark_as_pending_leave(&self, nid: &Nid, pending: bool);
+	async fn get_group(&self, uid: &Id, epoch: u64) -> Result<Group, Error>;
 	async fn get_latest_epoch(&self, guid: Id) -> Result<Group, Error>;
 	// someone used my public keys to invite me
 	async fn get_my_prekey_bundle_by_id(&self, id: Id) -> Result<transport::KeyBundle, Error>;
@@ -168,6 +202,7 @@ where
 	async fn handle_welcome(
 		&self,
 		wlcm: transport::ReceivedWelcome,
+		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
 		let transport::KeyBundle {
@@ -207,61 +242,196 @@ where
 		}
 	}
 
-	async fn handle_add(&self, add: transport::ReceivedAdd, receiver: Nid) -> Result<(), Error> {
+	async fn handle_add(
+		&self,
+		add: transport::ReceivedAdd,
+		sender: Nid,
+		receiver: Nid,
+	) -> Result<(), Error> {
+		// uncheck pending_remove for this nid, if any
+		// if my outdated add, reframe and resend, if not empty
 		todo!()
 	}
 
+	// returns Send { SendRemove { .. } }, if this REMOVE was triggered by me, but someone else's commit came first
 	async fn handle_remove(
 		&self,
 		remove: transport::ReceivedRemove,
+		sender: Nid,
+		receiver: Nid,
+	) -> Result<Option<transport::Send>, Error> {
+		use futures::future;
+		use std::cmp::Ordering::*;
+
+		let epoch = remove.cti.epoch;
+		let guid = remove.cti.guid;
+		let mut group = self.storage.get_latest_epoch(guid).await?;
+
+		match epoch.cmp(&group.epoch()) {
+			// an outdated epoch
+			Less => {
+				if sender == receiver {
+					if remove.delegated {
+						// I tried fulfilling a LEAVE request, but someone's commit came first
+						// no worries, it will handled later, if so required
+						Ok(None)
+					} else {
+						// I triggered this REMOVE, so I need to keep sending it until it's accepted
+						// I can't decrypt my own props/comits of this REMOVE, but I stored them previously anyway
+						let nids = future::try_join_all(
+							remove
+								.props
+								.props
+								.into_iter()
+								.map(|ct| self.storage.get_prop(ct.content_id)),
+						)
+						.await?
+						.into_iter()
+						.filter_map(|fp| match fp.prop {
+							Proposal::Remove { id } => Some(id),
+							_ => None,
+						})
+						.collect::<Vec<Nid>>();
+
+						Ok(Some(self.remove(&nids, sender, guid).await))
+					}
+				} else {
+					// it's someone else's outdated remove – they'll resend it later, if need be
+					Ok(None)
+				}
+			}
+			Equal => {
+				if sender != receiver {
+					// it's someone's REMOVE, so I need to decrypt both, the props
+					let fps = remove
+						.props
+						.props
+						.into_iter()
+						.map(|p| {
+							group.decrypt(p.clone(), ContentType::Propose).or(Err(
+								Error::FailedToDecrypt {
+									id: p.content_id,
+									content_type: ContentType::Propose,
+									sender,
+									guid,
+									epoch,
+								},
+							))
+						})
+						.collect::<Result<Vec<FramedProposal>, Error>>()?;
+					let fc = group
+						.decrypt::<FramedCommit>(remove.cti.clone(), ContentType::Commit)
+						.or(Err(Error::FailedToDecrypt {
+							id: remove.cti.content_id,
+							content_type: ContentType::Commit,
+							sender,
+							guid,
+							epoch,
+						}))?;
+
+					if let Some(group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
+						self.save_group(&group).await;
+					} else {
+						self.storage.delete_group(&guid).await;
+					}
+
+					Ok(None)
+				} else {
+					let fps = future::try_join_all(
+						remove
+							.props
+							.props
+							.into_iter()
+							.map(|ct| self.storage.get_prop(ct.content_id)),
+					)
+					.await?;
+					let fc = self.storage.get_commit(remove.cti.content_id).await?;
+
+					if let Some(group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
+						self.save_group(&group).await;
+
+						Ok(None)
+					} else {
+						Err(Error::FailedToProcessOwnCommit {
+							ctx: format!(
+								"REMOVE on guid: {:#?}, epoch: {}, sender: {:#?}",
+								guid, epoch, sender
+							),
+						})
+					}
+				}
+			}
+			Greater => {
+				// the only explanation is the server lost part of its state and I missed a few commits before this one
+				// nothing can be done here except to reinitialize
+				Err(Error::TooNewEpoch {
+					epoch,
+					current: group.epoch(),
+				})
+			}
+		}
+	}
+
+	async fn handle_edit(
+		&self,
+		edit: transport::ReceivedEdit,
+		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
 		todo!()
-	}
-
-	async fn handle_edit(&self, edit: transport::ReceivedEdit, receiver: Nid) -> Result<(), Error> {
-		todo!()
+		// if mine & outdated, reframe and resend, if required
 	}
 
 	async fn handle_props(
 		&self,
 		props: transport::ReceivedProposal,
+		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
 		todo!()
 	}
 
+	// currently, only updates are processed here; adds & removes are handled separately
 	async fn handle_commit(
 		&self,
 		commit: transport::ReceivedCommit,
+		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
 		// if someone is trying to remove someone who's already removed, ignore
 		// if I'm trying to remove (processing my own commit) someone who's already removed, ignore
 		// if I'm adding someone who's added, ignore
+
+		// get most recent epoch first
+
+		// get all fps for this epoch
+		// if sender == receiver
+		//	my own commit, so	check commit.cti.content_id to get a local copy of FramedCommit
+		//	process(fc, commit.ctd)
+
 		todo!()
 	}
 
-	// if LEAVE { sig: signed_by_evictee } is introduced, it can be processed here; hence, this should return Option<SendRemove> (for the latest epoch)
-	async fn handle_msg(&self, ct: Ciphertext, receiver: Nid) -> Result<(), Error> {
-		match self
-			.storage
-			.get_group(&ct.guid.as_bytes().to_vec(), ct.epoch)
-			.await
-		{
-			Ok(mut group) => {
-				let pt = group.decrypt::<Msg>(ct, ContentType::Msg)?;
+	// just a regular message
+	async fn handle_msg(&self, ct: Ciphertext, sender: Nid, receiver: Nid) -> Result<(), Error> {
+		// match self
+		// 	.storage
+		// 	.get_group(&ct.guid.as_bytes().to_vec(), ct.epoch)
+		// 	.await
+		// {
+		// 	Ok(mut group) => {
+		// 		let pt = group.decrypt::<Msg>(ct, ContentType::Msg)?;
 
-				self.save_group(&group).await;
+		// 		self.save_group(&group).await;
 
-				// TODO: return pt.0
-			}
-			Err(err) => {
-				// if not found, get the most recent on and compare epoch
-				// if recent.epoch < ct.epoch -> state corrupted
-				// else too old epoch
-			}
-		}
+		// 		// TODO: return pt.0
+		// 	}
+		// 	Err(err) => {
+		// 		// if not found, get the most recent on and compare epoch
+		// 		// if recent.epoch < ct.epoch -> state corrupted
+		// 		// else too old epoch
+		// 	}
+		// }
 
 		// TODO: how about admins?
 
@@ -269,23 +439,124 @@ where
 		Ok(())
 	}
 
-	// TODO: should this return anything?
-	// TODO: introduce a type
+	async fn handle_leave(&self, ct: Ciphertext, sender: Nid, receiver: Nid) -> Result<(), Error> {
+		// I leaft on one of my other devices – remove this group
+		if receiver.is_same_id(&sender) {
+			self.storage.delete_group(&ct.guid).await;
+		} else {
+			// someone else is leaving, so mark him as pending_leave and maybe remove during one of the consequent updates
+			self.storage.mark_as_pending_leave(&sender, true).await;
+		}
+
+		Ok(())
+	}
+
+	pub fn send_msg(&self, pt: &[u8], sender: Nid, guid: Id) -> Result<(), Error> {
+		// return SendSmg and Option<SendCommit>
+		todo!()
+	}
+
+	// this shouldn't be public, by the way; instead, use from send_msg()
+	fn update(&self, sender: Nid) {
+		// 1 get the most recent epoch
+		// 2 if pending_remove(guid) is not empty
+		//		send SendRemove(pending_remove-s)
+		//	 else
+		//		send SendCommit
+	}
+
+	pub async fn edit(&self, desc: &[u8], sender: Nid, guid: Id) -> Result<(), Error> {
+		// keep sending if fails
+		todo!()
+	}
+
+	pub async fn add(&self, invitees: &[Nid], sender: Nid, guid: Id) -> Result<(), Error> {
+		// 1 fetch all nids for this contact
+		// if this commit fails, check whether some nids are already added by someone else
+		todo!()
+	}
+
+	// return serialized SendRemove?
+	pub async fn remove(&self, nids: &[Nid], sender: Nid, guid: Id) -> transport::Send {
+		// 1 reframe the proposals to resign/recrypt and filter unnecessary ones
+		// let reframed = group.reframe_proposals(&props);
+		// 2 get missing nids in case of missing devies
+		//
+		// 3 return
+
+		// also, get all nids for this nid again and propose for them as well
+
+		// let group = self.storage.get_latest_epoch(guid).await?;
+
+		// 1 get all nids for this user
+		// 2 make FramedProposals and store them
+		// 3 make FrameCommit and store it
+		// it is possible some peers are already removed; check and filter
+
+		// let nids = self.storage.get_nids_for_nid(&id).await?;
+		// nids.into_iter().for_each(|nid| {
+		// 	if props.get(&nid.as_bytes()).is_none() {
+		// 		if let Ok((fp, ct)) = group.propose_remove(&nid) {
+		// 			props.insert(nid.as_bytes(), nid);
+		// 		}
+		// 	}
+		// });
+
+		todo!()
+	}
+
+	// handling Rcvd might required resending. Hence Option<transport::Send>
 	pub async fn handle_received(
 		&self,
 		rcvd: transport::Received,
+		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
+	) -> Result<Option<transport::Send>, Error> {
 		use transport::Received::*;
 
+		// FIXME: mark Received as processed at some point
+
 		match rcvd {
-			Welcome(w) => self.handle_welcome(w, receiver).await,
-			Add(a) => self.handle_add(a, receiver).await,
-			Remove(r) => self.handle_remove(r, receiver).await,
-			Edit(e) => self.handle_edit(e, receiver).await,
-			Props(p) => self.handle_props(p, receiver).await,
-			Commit(c) => self.handle_commit(c, receiver).await,
-			Msg(m) => self.handle_msg(m, receiver).await,
+			Welcome(w) => {
+				self.handle_welcome(w, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Add(a) => {
+				self.handle_add(a, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Remove(r) => {
+				Ok(self.handle_remove(r, sender, receiver).await?)
+
+				// Ok(None)
+			}
+			Edit(e) => {
+				self.handle_edit(e, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Props(p) => {
+				self.handle_props(p, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Commit(c) => {
+				self.handle_commit(c, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Leave(l) => {
+				self.handle_leave(l, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Msg(m) => {
+				self.handle_msg(m, sender, receiver).await?;
+
+				Ok(None)
+			}
 		}
 	}
 
@@ -384,13 +655,13 @@ where
 	// keep in mind, each nid is simply a concatenation of CID & device_number, eg ABCDEFGH42, so no `:` is used
 	// TODO: do I need to additionally save group meta context, eg name, description, roles, etc?
 	async fn save_group(&self, group: &Group) {
-		let roster: Vec<Vec<u8>> = group.roster().ids().iter().map(|n| n.as_bytes()).collect();
+		let roster: Vec<Nid> = group.roster().ids();
 		self.storage
 			.save_group(
-				&group.serialize(),
-				group.uid().as_bytes(),
+				&group,
+				&group.uid(),
 				group.epoch(),
-				roster.iter().map(|n| n.as_slice()).collect(),
+				roster.iter().map(|n| n).collect(),
 			)
 			.await;
 	}
