@@ -520,6 +520,7 @@ impl From<&member::Member> for Member {
 		Self {
 			id: val.id.as_bytes().to_vec(),
 			kp: (&val.kp).into(),
+			joined_at_epoch: val.joined_at_epoch,
 		}
 	}
 }
@@ -537,6 +538,7 @@ impl TryFrom<Member> for member::Member {
 		Ok(Self::new(
 			nid::Nid::try_from(val.id).or(Err(Error::WrongNidSize))?,
 			val.kp.try_into().or(Err(Error::BadKeyPackageFormat))?,
+			val.joined_at_epoch,
 		))
 	}
 }
@@ -2094,7 +2096,7 @@ mod tests {
 		let s_kp = dilithium::KeyPair::generate();
 		let pack =
 			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
-		let member = member::Member::new(nid::Nid::new(b"abcdefgh", 0), pack);
+		let member = member::Member::new(nid::Nid::new(b"abcdefgh", 0), pack, 7);
 		let serialized = member.serialize();
 		let deserialized = member::Member::deserialize(&serialized);
 
@@ -2113,6 +2115,7 @@ mod tests {
 				svk: dilithium::PublicKey::new([56u8; 2592]),
 				sig: dilithium::Signature::new([78u8; 4595]),
 			},
+			0,
 		));
 
 		_ = r.add(member::Member::new(
@@ -2123,6 +2126,7 @@ mod tests {
 				svk: dilithium::PublicKey::new([78u8; 2592]),
 				sig: dilithium::Signature::new([90u8; 4595]),
 			},
+			42,
 		));
 
 		_ = r.add(member::Member::new(
@@ -2133,6 +2137,7 @@ mod tests {
 				svk: dilithium::PublicKey::new([90u8; 2592]),
 				sig: dilithium::Signature::new([12u8; 4595]),
 			},
+			3,
 		));
 
 		let serialized = r.serialize();

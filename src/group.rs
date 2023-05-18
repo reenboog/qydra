@@ -211,7 +211,7 @@ impl Group {
 
 	// generates a group owned by owner; recipients should use a different initializer!
 	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
-		let roster = Roster::from(Member::new(owner.id, owner.kp));
+		let roster = Roster::from(Member::new(owner.id, owner.kp, 0));
 		let uid = Id(rand::thread_rng().gen());
 		let epoch = 0;
 		let joiner_secret = rand::thread_rng().gen();
@@ -715,7 +715,7 @@ impl Group {
 					return Err(Error::InvalidKeyPair);
 				}
 
-				new.roster.set(&sender, &commit.kp);
+				new.roster.set_kp(&sender, &commit.kp);
 
 				let (_, epoch_secrets, conf_key) = new.derive_secrets(&self, &com_secret);
 
@@ -922,7 +922,7 @@ impl Group {
 		let (kp, ilum_sk, x448_sk, dilithium_sk) = self.gen_kp();
 
 		// should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
-		_ = self.roster.set(&self.user_id, &kp);
+		self.roster.set_kp(&self.user_id, &kp);
 		self.ilum_dk = ilum_sk;
 		self.x448_dk = x448_sk;
 		self.ssk = dilithium_sk;
@@ -984,7 +984,7 @@ impl Group {
 						&& !diff.updated.contains(&sender)
 						&& kp.verify()
 					{
-						new.roster.set(&sender, kp);
+						new.roster.set_kp(&sender, kp);
 
 						// this is my own update, it is verified, so set ssk & dk as well
 						if *sender == new.user_id {
@@ -1010,7 +1010,7 @@ impl Group {
 					// do not add, if added
 					// ignore if the key pair is invalid
 					if !diff.removed.contains(&sender) && !new.roster.contains(&id) && kp.verify() {
-						let added = Member::new(*id, kp.clone());
+						let added = Member::new(*id, kp.clone(), new.epoch);
 
 						_ = new.roster.add(added.clone());
 						diff.added.push(added);
@@ -1144,7 +1144,7 @@ mod tests {
 
 		let mut alice_group = Group::create(seed, alice);
 
-		let bob_user_id = Nid::new(b"bobbobbo", 0);
+		let bob_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
 		let bob_user_skp = dilithium::KeyPair::generate();
@@ -1155,7 +1155,7 @@ mod tests {
 			&bob_user_skp.private,
 		);
 		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_user_id, bob_user_kp.clone())
+			.propose_add(bob_id, bob_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
@@ -1180,7 +1180,7 @@ mod tests {
 
 		// bob joins
 		let mut bob_group = Group::join(
-			&bob_user_id,
+			&bob_id,
 			&bob_user_kp,
 			&bob_user_ekp.sk,
 			&bob_x448_kp.private,
@@ -1191,6 +1191,15 @@ mod tests {
 		)
 		.unwrap();
 
+		assert_eq!(
+			alice_group.roster.get(&alice_id).unwrap().joined_at_epoch,
+			0
+		);
+		assert_eq!(
+			alice_group.roster.get(&bob_id).unwrap().joined_at_epoch,
+			bob_group.roster.get(&bob_id).unwrap().joined_at_epoch
+		);
+		assert_eq!(alice_group.roster.get(&bob_id).unwrap().joined_at_epoch, 1);
 		assert_eq!(alice_group.uid, bob_group.uid);
 		assert_eq!(alice_group.epoch, bob_group.epoch);
 		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
@@ -1207,7 +1216,7 @@ mod tests {
 		assert_eq!(alice_group.secrets, bob_group.secrets);
 		assert_eq!(alice_group.description, bob_group.description);
 
-		let charlie_user_id = Nid::new(b"charliec", 0);
+		let charlie_id = Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_x448_kp = x448::KeyPair::generate();
 		let charlie_user_skp = dilithium::KeyPair::generate();
@@ -1219,7 +1228,7 @@ mod tests {
 		);
 		// bob proposes to add charlie
 		let (add_charlie_prop, _) = bob_group
-			.propose_add(charlie_user_id, charlie_user_kp.clone())
+			.propose_add(charlie_id, charlie_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (update_bob_prop, _) = bob_group.propose_update();
@@ -1261,7 +1270,7 @@ mod tests {
 			.unwrap();
 		// charlie joins
 		let mut charlie_group = Group::join(
-			&charlie_user_id,
+			&charlie_id,
 			&charlie_user_kp,
 			&charlie_user_ekp.sk,
 			&charlie_x448_kp.private,
@@ -1271,6 +1280,33 @@ mod tests {
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
 		)
 		.unwrap();
+
+		// make sure existing users' joined_at_epoch-s don't change and the new ones have the right value
+		assert_eq!(
+			alice_group.roster.get(&alice_id).unwrap().joined_at_epoch,
+			0
+		);
+		assert_eq!(bob_group.roster.get(&bob_id).unwrap().joined_at_epoch, 1);
+		assert_eq!(
+			alice_group.roster.get(&charlie_id).unwrap().joined_at_epoch,
+			2
+		);
+		assert_eq!(
+			alice_group.roster.get(&charlie_id).unwrap().joined_at_epoch,
+			bob_group.roster.get(&charlie_id).unwrap().joined_at_epoch
+		);
+		assert_eq!(
+			alice_group.roster.get(&charlie_id).unwrap().joined_at_epoch,
+			charlie_group
+				.roster
+				.get(&charlie_id)
+				.unwrap()
+				.joined_at_epoch
+		);
+		assert_eq!(
+			alice_group.roster.get(&charlie_id).unwrap().joined_at_epoch,
+			2
+		);
 
 		assert_eq!(alice_group.uid, bob_group.uid);
 		assert_eq!(alice_group.epoch, bob_group.epoch);

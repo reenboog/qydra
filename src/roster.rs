@@ -63,9 +63,10 @@ impl Roster {
 	}
 
 	// sets kp for id and returns prev_kp, if any, or nil
-	pub fn set(&mut self, id: &Nid, kp: &KeyPackage) -> Option<Member> {
-		self.members
-			.insert(id.clone(), Member::new(id.clone(), kp.clone()))
+	pub fn set_kp(&mut self, id: &Nid, kp: &KeyPackage) {
+		self.members.entry(*id).and_modify(|m| {
+			m.kp = kp.clone();
+		});
 	}
 
 	pub fn ids(&self) -> Vec<Nid> {
@@ -123,6 +124,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			0,
 		));
 
 		assert!(r.contains(&Nid::new(b"abcdefgh", 0)));
@@ -142,6 +144,7 @@ mod tests {
 					svk: PublicKey::new([56u8; 2592]),
 					sig: Signature::new([78u8; 4595]),
 				},
+				1
 			))
 			.is_ok());
 
@@ -154,6 +157,7 @@ mod tests {
 					svk: PublicKey::new([78u8; 2592]),
 					sig: Signature::new([90u8; 4595]),
 				},
+				0
 			))
 			.is_err());
 	}
@@ -168,6 +172,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			22,
 		));
 
 		_ = roster.add(Member::new(
@@ -178,6 +183,7 @@ mod tests {
 				svk: PublicKey::new([33u8; 2592]),
 				sig: Signature::new([77u8; 4595]),
 			},
+			0,
 		));
 
 		assert!(roster.remove(&Nid::new(b"abcdefgh", 0)).is_ok());
@@ -211,6 +217,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			0,
 		));
 
 		assert!(roster.contains(&Nid::new(b"abcdefgh", 0)));
@@ -224,6 +231,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			0,
 		));
 
 		assert!(roster.contains(&Nid::new(b"abcdwxyz", 0)));
@@ -243,6 +251,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			21,
 		));
 
 		_ = r1.add(Member::new(
@@ -253,6 +262,7 @@ mod tests {
 				svk: PublicKey::new([78u8; 2592]),
 				sig: Signature::new([90u8; 4595]),
 			},
+			1,
 		));
 
 		let mut r2 = Roster::new();
@@ -266,6 +276,7 @@ mod tests {
 				svk: PublicKey::new([78u8; 2592]),
 				sig: Signature::new([90u8; 4595]),
 			},
+			1,
 		));
 
 		_ = r2.add(Member::new(
@@ -276,6 +287,7 @@ mod tests {
 				svk: PublicKey::new([56u8; 2592]),
 				sig: Signature::new([78u8; 4595]),
 			},
+			21,
 		));
 
 		// ensure sorting is respected when hashing
@@ -283,5 +295,32 @@ mod tests {
 
 		// and non-zeroes
 		assert_ne!(r1.hash(), [0u8; 32]);
+
+		// same as r2, but some joined_at_epoch values are different, so should be the hashes
+		let mut r3 = Roster::new();
+
+		_ = r3.add(Member::new(
+			Nid::new(b"abcdwxyz", 0),
+			KeyPackage {
+				ilum_ek: [56u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+				svk: PublicKey::new([78u8; 2592]),
+				sig: Signature::new([90u8; 4595]),
+			},
+			4,
+		));
+
+		_ = r3.add(Member::new(
+			Nid::new(b"abcdefgh", 0),
+			KeyPackage {
+				ilum_ek: [34u8; 768],
+				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+				svk: PublicKey::new([56u8; 2592]),
+				sig: Signature::new([78u8; 4595]),
+			},
+			1,
+		));
+
+		assert_ne!(r2.hash(), r3.hash());
 	}
 }

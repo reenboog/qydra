@@ -4,11 +4,16 @@ use crate::{hash::Hashable, key_package::KeyPackage, nid::Nid};
 pub struct Member {
 	pub id: Nid,
 	pub kp: KeyPackage,
+	pub joined_at_epoch: u64,
 }
 
 impl Member {
-	pub fn new(id: Nid, kp: KeyPackage) -> Self {
-		Self { id, kp }
+	pub fn new(id: Nid, kp: KeyPackage, joined_at_epoch: u64) -> Self {
+		Self {
+			id,
+			kp,
+			joined_at_epoch,
+		}
 	}
 }
 
@@ -16,7 +21,15 @@ impl Hashable for Member {
 	fn hash(&self) -> crate::hash::Hash {
 		use sha2::{Digest, Sha256};
 
-		Sha256::digest([self.id.as_bytes().as_slice(), self.kp.hash().as_slice()].concat()).into()
+		Sha256::digest(
+			[
+				self.id.as_bytes().as_slice(),
+				self.kp.hash().as_slice(),
+				self.joined_at_epoch.to_be_bytes().as_slice(),
+			]
+			.concat(),
+		)
+		.into()
 	}
 }
 

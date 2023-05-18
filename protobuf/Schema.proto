@@ -87,6 +87,7 @@ message KeyPackage {
 message Member {
 	required bytes id = 1;
 	required KeyPackage kp = 2;
+	required uint64 joined_at_epoch = 3;
 }
 
 message Roster {
@@ -333,7 +334,7 @@ message Received {
 		ReceivedProposal props = 5;
 		// update commit, but can be more generic
 		ReceivedCommit commit = 6;
-		// a request to leave
+		// a request to leave, contains a farewell message (Msg)
 		Ciphertext leave = 7;
 		// an arbitrary app message
 		Ciphertext msg = 8;
