@@ -28,23 +28,19 @@
 
 */
 
-use std::{collections::HashMap, sync::Arc};
+use std::{sync::Arc};
 
 use async_trait::async_trait;
 
 use crate::{
 	ciphertext::{Ciphertext, ContentType},
-	commit::{CommitCtd, FramedCommit},
-	dilithium::{self},
+	commit::{FramedCommit},
 	group::{self, Group, Owner},
-	hash::{self, Hashable},
-	hpkencrypt::{decrypt, CmpdCtd},
-	id::{Id, Identifiable},
+	id::{Id},
 	key_package::KeyPackage,
 	msg::Msg,
 	nid::Nid,
 	proposal::{FramedProposal, Proposal},
-	serializable::{Deserializable, Serializable},
 	transport::{self, SendLeave, SendMsg},
 };
 
@@ -115,7 +111,7 @@ pub trait Storage {
 	async fn mark_rcvd_as_processed(&self, id: Id);
 
 	// TODO: could it be sufficient to represent user identity as a signing key?
-	async fn save_group(&self, group: &Group, uid: &Id, epoch: u64, roster: Vec<&Nid>);
+	async fn save_group(&self, group: &Group, uid: &Id, epoch: u64, roster: Vec<&Nid>) -> Result<(), Error>;
 	// delete all epochs for this group, all framed commits, all pending_remove-s
 	async fn delete_group(&self, guid: &Id);
 
@@ -130,7 +126,7 @@ pub trait Storage {
 
 	// async fn save_proposal(&self, guid: Id, prop: &[u8]);
 	// mark nid for removal during one of the next update cycles
-	async fn mark_as_pending_remove(&self, guid: Id, pending: bool, nid: Nid);
+	async fn mark_as_pending_remove(&self, guid: Id, pending: bool, nid: Nid) -> Result<(), Error>;
 	// should return all nids for a given nid stored in the database
 	async fn get_pending_removes(&self, guid: Id) -> Result<Vec<Nid>, Error>;
 
@@ -199,7 +195,7 @@ where
 		// no such group should exist yet
 		if let Err(Error::NoGroupFound(_)) = self.storage.get_latest_epoch(group.uid()).await {
 			// TODO: check if the sender can invite me
-			self.save_group(&group).await;
+			self.save_group(&group).await?;
 
 			Ok(())
 		} else {
@@ -214,7 +210,6 @@ where
 		sender: Nid,
 		receiver: Nid,
 	) -> Result<Option<transport::Send>, Error> {
-		use futures::future;
 		use std::cmp::Ordering::*;
 
 		let epoch = add.commit.cti.epoch;
@@ -346,12 +341,12 @@ where
 					// Also, if just a device is remove (not the whole account), no need to display anything
 					if let Some(new_group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
 						// decryption changes the inner chains, so always save to achieve FS
-						self.save_group(&group).await;
+						self.save_group(&group).await?;
 						// we have a new epoch, so save this new group as well
-						self.save_group(&new_group).await;
+						self.save_group(&new_group).await?;
 					} else {
 						// I was removed, so delete the group and all its state
-						self.delete_group(&guid).await;
+						self.delete_group(&guid).await?;
 					}
 
 					Ok(fps)
@@ -371,7 +366,7 @@ where
 					// is it required to check my own access rules? If I fake this remove, others won't accept it anyway
 					// no need to save the old group here, since it hasn't changed (nothing was decrypted & processing is immutable)
 					if let Some(new_group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
-						self.save_group(&new_group).await;
+						self.save_group(&new_group).await?;
 
 						Ok(fps)
 					} else {
@@ -385,7 +380,7 @@ where
 				}?;
 
 				// mark the removed nids as not pending remove, had they ever been marked
-				future::join_all(
+				future::try_join_all(
 					fps.into_iter()
 						.filter_map(|fp| match fp.prop {
 							Proposal::Remove { id } => Some(id),
@@ -393,7 +388,7 @@ where
 						})
 						.map(|id| self.storage.mark_as_pending_remove(guid, false, id)),
 				)
-				.await;
+				.await?;
 
 				Ok(None)
 			}
@@ -485,6 +480,7 @@ where
 		// so that this remove would make no sense anymore:
 		// *---------------->---->
 		// q, m, u, u, m, r, a, m
+		// to fight that, Member::joinead_at_epoch is used below
 
 		let guid = ct.guid;
 		let epoch = ct.epoch;
@@ -503,7 +499,7 @@ where
 				// if content_id doesn't match, someone is trying to fake me leaving
 				if self.storage.is_pending_leave(guid, ct.content_id).await? {
 					// it's my own leave, so just quit
-					self.delete_group(&guid).await;
+					self.delete_group(&guid).await?;
 				}
 
 				Ok(None)
@@ -514,15 +510,16 @@ where
 				if let Ok(msg) = group.decrypt::<Msg>(ct.clone(), ContentType::Msg, &sender) {
 					if receiver.is_same_id(&sender) {
 						// I left on one of my other devices – remove this group immediately
-						self.delete_group(&ct.guid).await;
+						self.delete_group(&ct.guid).await?;
 
 						Ok(None)
 					} else {
+						// an encryption key has been consumed, so save the group to keep FS
+						self.save_group(&group).await?;
 						// someone else is leaving, so mark him as pending_remove and maybe remove during one of the consequent updates
-						self.save_group(&group).await;
 						self.storage
 							.mark_as_pending_remove(guid, true, sender)
-							.await;
+							.await?;
 
 						// msg can be used to display the sender's farewell in the chat, if specified
 						Ok(Some(msg))
@@ -586,7 +583,7 @@ where
 			payload: ct,
 			recipients: group.roster().ids(),
 		};
-		self.save_group(&group).await;
+		self.save_group(&group).await?;
 		self.storage.mark_as_pending_leave(guid, true, req_id).await;
 
 		Ok(transport::Send::Leave(SendLeave { farewell }))
@@ -741,7 +738,7 @@ where
 				.unwrap();
 
 			// TODO: add an optional SendInvite in case everything fails?
-			self.save_group(&group).await;
+			self.save_group(&group).await?;
 
 			let (wcti, wctds) = wlcms.unwrap();
 			let invite = transport::SendInvite {
@@ -772,23 +769,26 @@ where
 			update: None, // FIXME: apply props and update-commit, if required
 		};
 
-		self.save_group(&group).await;
+		self.save_group(&group).await?;
 		// FIXME: increment counters!
 		Ok(encrypted)
 	}
 
-	async fn delete_group(&self, guid: &Id) {
+	// db may be locked, hence Result
+	async fn delete_group(&self, guid: &Id) -> Result<(), Error> {
 		self.storage.delete_group(guid).await;
 		// delete pending_remove
 		// delete framed proposals
 		// delete framed commits
 		// delete description and other info?
 		// delete pending_leave
+		Ok(())
 	}
 
 	// keep in mind, each nid is simply a concatenation of CID & device_number, eg ABCDEFGH42, so no `:` is used
 	// TODO: do I need to additionally save group meta context, eg name, description, roles, etc?
-	async fn save_group(&self, group: &Group) {
+	// db may be locked, hence Result
+	async fn save_group(&self, group: &Group) -> Result<(), Error> {
 		// TODO: add a flag to clear all previous epochs and remove commits and proposals?
 		let roster: Vec<Nid> = group.roster().ids();
 		self.storage
@@ -798,7 +798,7 @@ where
 				group.epoch(),
 				roster.iter().map(|n| n).collect(),
 			)
-			.await;
+			.await
 	}
 }
 

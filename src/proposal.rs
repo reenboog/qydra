@@ -5,7 +5,6 @@ use crate::{
 	id::{Id, Identifiable},
 	key_package::KeyPackage,
 	nid::Nid,
-	serializable::Deserializable,
 };
 
 #[derive(Clone, PartialEq, Debug)]
