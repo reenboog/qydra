@@ -348,7 +348,6 @@ impl Group {
 
 		Ciphertext {
 			content_id,
-			sender,
 			guid: self.uid,
 			epoch: self.epoch,
 			gen,
@@ -360,11 +359,11 @@ impl Group {
 		}
 	}
 
-	pub fn decrypt<T>(&mut self, ct: Ciphertext, content_type: ContentType) -> Result<T, Error>
+	pub fn decrypt<T>(&mut self, ct: Ciphertext, content_type: ContentType, sender: &Nid) -> Result<T, Error>
 	where
 		T: Deserializable,
 	{
-		if let Some(sender) = self.roster.get(&ct.sender) {
+		if let Some(sender) = self.roster.get(sender) {
 			let leaf = self.roster.idx(sender.id).or(Err(Error::UnknownSender))?;
 			let to_sign = Sha256::digest(
 				[
@@ -1243,7 +1242,7 @@ mod tests {
 
 		// ensure recipients (alice for now) can decrypt the encrypted FramedCommit as well
 		assert!(alice_group
-			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit)
+			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit, &bob_id)
 			.is_ok());
 
 		// alices processes
@@ -1351,19 +1350,19 @@ mod tests {
 
 			assert_eq!(
 				Ok(a.clone()),
-				bob_group.decrypt(ma.clone(), ContentType::Msg)
+				bob_group.decrypt(ma.clone(), ContentType::Msg, &alice_id)
 			);
-			assert_eq!(Ok(a.clone()), charlie_group.decrypt(ma, ContentType::Msg));
+			assert_eq!(Ok(a.clone()), charlie_group.decrypt(ma, ContentType::Msg, &alice_id));
 			assert_eq!(
 				Ok(b.clone()),
-				alice_group.decrypt(mb.clone(), ContentType::Msg)
+				alice_group.decrypt(mb.clone(), ContentType::Msg, &bob_id)
 			);
-			assert_eq!(Ok(b.clone()), charlie_group.decrypt(mb, ContentType::Msg));
+			assert_eq!(Ok(b.clone()), charlie_group.decrypt(mb, ContentType::Msg, &bob_id));
 			assert_eq!(
 				Ok(c.clone()),
-				alice_group.decrypt(mc.clone(), ContentType::Msg)
+				alice_group.decrypt(mc.clone(), ContentType::Msg, &charlie_id)
 			);
-			assert_eq!(Ok(c.clone()), bob_group.decrypt(mc, ContentType::Msg));
+			assert_eq!(Ok(c.clone()), bob_group.decrypt(mc, ContentType::Msg, &charlie_id));
 		}
 
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
@@ -1410,7 +1409,7 @@ mod tests {
 
 		// decrypt using an encrypted fc this time instead
 		let decrypted_fc = charlie_group
-			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit)
+			.decrypt::<FramedCommit>(fc_ct, ContentType::Commit, &bob_id)
 			.unwrap();
 
 		let charlie_group = charlie_group
@@ -1524,12 +1523,12 @@ mod tests {
 		// bob decrypts this ct just fine
 		assert_eq!(
 			Ok(update_alice_prop.clone()),
-			bob_group.decrypt(ct.clone(), ContentType::Propose)
+			bob_group.decrypt(ct.clone(), ContentType::Propose, &alice_id)
 		);
 		// but alice can't decrypt her own ct, for she has already consumed its key
 		assert_eq!(
 			Err(Error::FailedToDeriveChainTreeKey),
-			alice_group.decrypt::<FramedProposal>(ct, ContentType::Propose)
+			alice_group.decrypt::<FramedProposal>(ct, ContentType::Propose, &alice_id)
 		);
 	}
 
@@ -1555,7 +1554,7 @@ mod tests {
 
 		let mut alice_group = Group::create(seed, alice);
 
-		let bob_user_id = Nid::new(b"bobbobbo", 0);
+		let bob_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
 		let bob_user_skp = dilithium::KeyPair::generate();
@@ -1566,7 +1565,7 @@ mod tests {
 			&bob_user_skp.private,
 		);
 		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_user_id, bob_user_kp.clone())
+			.propose_add(bob_id, bob_user_kp.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
@@ -1591,7 +1590,7 @@ mod tests {
 
 		// bob joins
 		let mut bob_group = Group::join(
-			&bob_user_id,
+			&bob_id,
 			&bob_user_kp,
 			&bob_user_ekp.sk,
 			&bob_x448_kp.private,
@@ -1608,11 +1607,11 @@ mod tests {
 
 			assert_eq!(
 				Ok(a.clone()),
-				bob_group.decrypt(alice_group.encrypt(&a, ContentType::Msg), ContentType::Msg)
+				bob_group.decrypt(alice_group.encrypt(&a, ContentType::Msg), ContentType::Msg, &alice_id)
 			);
 			assert_eq!(
 				Ok(b.clone()),
-				alice_group.decrypt(bob_group.encrypt(&b, ContentType::Msg), ContentType::Msg)
+				alice_group.decrypt(bob_group.encrypt(&b, ContentType::Msg), ContentType::Msg, &bob_id)
 			);
 		}
 	}

@@ -302,7 +302,7 @@ where
 						.props
 						.into_iter()
 						.map(|p| {
-							group.decrypt(p.clone(), ContentType::Propose).or(Err(
+							group.decrypt(p.clone(), ContentType::Propose, &sender).or(Err(
 								Error::FailedToDecrypt {
 									id: p.content_id,
 									content_type: ContentType::Propose,
@@ -315,7 +315,7 @@ where
 						})
 						.collect::<Result<Vec<FramedProposal>, Error>>()?;
 					let fc = group
-						.decrypt::<FramedCommit>(remove.cti.clone(), ContentType::Commit)
+						.decrypt::<FramedCommit>(remove.cti.clone(), ContentType::Commit, &sender)
 						.or(Err(Error::FailedToDecrypt {
 							id: remove.cti.content_id,
 							content_type: ContentType::Commit,
@@ -489,7 +489,7 @@ where
 				let mut group = self.storage.get_group(&guid, epoch).await?;
 
 				// ensure it's actually a leave message
-				if let Ok(msg) = group.decrypt::<Msg>(ct.clone(), ContentType::Msg) {
+				if let Ok(msg) = group.decrypt::<Msg>(ct.clone(), ContentType::Msg, &sender) {
 					if receiver.is_same_id(&sender) {
 						// I left on one of my other devices – remove this group immediately
 						self.delete_group(&ct.guid).await;

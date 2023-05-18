@@ -179,18 +179,15 @@ message CommitCtd {
 }
 
 message Ciphertext {
-	// TODO: timestamp against replay attacks?
 	required bytes content_id = 1;
 	required bytes payload = 2;
 	required bytes guid = 3;
 	required uint64 epoch = 4;
 	required uint32 gen = 5;
-	// TODO: sender might be removed
-	required bytes sender = 6;
-	required bytes iv = 7;
-	required bytes sig = 8;
-	required bytes mac = 9;
-	required bytes reuse_grd = 10;
+	required bytes iv = 6;
+	required bytes sig = 7;
+	required bytes mac = 8;
+	required bytes reuse_grd = 9;
 }
 
 message WlcmCti {
@@ -212,8 +209,6 @@ message SendCommit {
 	required Ciphertext cti = 1;
 	repeated CommitCtd ctds = 2;
 }
-
-// FIXME: introduce LEAVE
 
 // combines a set of proposals into one
 message SendProposal {

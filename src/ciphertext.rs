@@ -1,4 +1,4 @@
-use crate::{aes_gcm, dilithium, hmac, id::Id, nid::Nid, reuse_guard};
+use crate::{aes_gcm, dilithium, hmac, id::Id, reuse_guard};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentType {
@@ -14,7 +14,6 @@ pub struct Ciphertext {
 	pub guid: Id,
 	pub epoch: u64,
 	pub gen: u32,
-	pub sender: Nid,
 	pub iv: aes_gcm::Iv,
 	pub sig: dilithium::Signature,
 	pub mac: hmac::Digest,
