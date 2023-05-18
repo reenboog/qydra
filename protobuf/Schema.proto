@@ -1,7 +1,6 @@
-// FIXME: move me to a dependency instead
 syntax = "proto2";
 
-package main;
+package qydra;
 
 message Group {
 	required bytes uid = 1;
