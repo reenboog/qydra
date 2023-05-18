@@ -26,7 +26,6 @@ pub struct SendInvite {
 pub struct SendRemove {
 	pub props: Vec<Ciphertext>,
 	pub commit: SendCommit,
-	pub delegated: bool,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -92,7 +91,6 @@ pub struct ReceivedRemove {
 	pub props: ReceivedProposal,
 	pub cti: Ciphertext,
 	pub ctd: Option<CmpdCtd>,
-	pub delegated: bool,
 }
 
 #[derive(PartialEq, Debug, Clone)]

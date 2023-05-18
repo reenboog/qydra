@@ -359,7 +359,12 @@ impl Group {
 		}
 	}
 
-	pub fn decrypt<T>(&mut self, ct: Ciphertext, content_type: ContentType, sender: &Nid) -> Result<T, Error>
+	pub fn decrypt<T>(
+		&mut self,
+		ct: Ciphertext,
+		content_type: ContentType,
+		sender: &Nid,
+	) -> Result<T, Error>
 	where
 		T: Deserializable,
 	{
@@ -1352,17 +1357,26 @@ mod tests {
 				Ok(a.clone()),
 				bob_group.decrypt(ma.clone(), ContentType::Msg, &alice_id)
 			);
-			assert_eq!(Ok(a.clone()), charlie_group.decrypt(ma, ContentType::Msg, &alice_id));
+			assert_eq!(
+				Ok(a.clone()),
+				charlie_group.decrypt(ma, ContentType::Msg, &alice_id)
+			);
 			assert_eq!(
 				Ok(b.clone()),
 				alice_group.decrypt(mb.clone(), ContentType::Msg, &bob_id)
 			);
-			assert_eq!(Ok(b.clone()), charlie_group.decrypt(mb, ContentType::Msg, &bob_id));
+			assert_eq!(
+				Ok(b.clone()),
+				charlie_group.decrypt(mb, ContentType::Msg, &bob_id)
+			);
 			assert_eq!(
 				Ok(c.clone()),
 				alice_group.decrypt(mc.clone(), ContentType::Msg, &charlie_id)
 			);
-			assert_eq!(Ok(c.clone()), bob_group.decrypt(mc, ContentType::Msg, &charlie_id));
+			assert_eq!(
+				Ok(c.clone()),
+				bob_group.decrypt(mc, ContentType::Msg, &charlie_id)
+			);
 		}
 
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
@@ -1607,11 +1621,19 @@ mod tests {
 
 			assert_eq!(
 				Ok(a.clone()),
-				bob_group.decrypt(alice_group.encrypt(&a, ContentType::Msg), ContentType::Msg, &alice_id)
+				bob_group.decrypt(
+					alice_group.encrypt(&a, ContentType::Msg),
+					ContentType::Msg,
+					&alice_id
+				)
 			);
 			assert_eq!(
 				Ok(b.clone()),
-				alice_group.decrypt(bob_group.encrypt(&b, ContentType::Msg), ContentType::Msg, &bob_id)
+				alice_group.decrypt(
+					bob_group.encrypt(&b, ContentType::Msg),
+					ContentType::Msg,
+					&bob_id
+				)
 			);
 		}
 	}

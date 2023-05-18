@@ -256,9 +256,6 @@ message SendRemove {
 	// commit & each prop is sent to commit.ctds.user_id
 	repeated Ciphertext props = 1;
 	required SendCommit commit = 2;
-	// if true, some one must have previousle left and requested the group to remove himself
-	// should be ignored by recipients, if no local pending_remove entry found
-	required bool delegated = 3;
 }
 
 message Send {
@@ -306,8 +303,6 @@ message ReceivedRemove {
 	required Ciphertext cti = 2;
 	// nil if evicted
 	optional CmpdCtd ctd = 3; 
-	// same as in SendRemove
-	required bool delegated = 4;
 }
 
 message ReceivedEdit {

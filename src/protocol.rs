@@ -131,7 +131,8 @@ pub trait Storage {
 	// async fn save_proposal(&self, guid: Id, prop: &[u8]);
 	// mark nid for removal during one of the next update cycles
 	async fn mark_as_pending_remove(&self, guid: Id, pending: bool, nid: Nid);
-	async fn get_pending_removes(&self, guid: Id) -> Vec<Nid>;
+	// should return all nids for a given nid stored in the database
+	async fn get_pending_removes(&self, guid: Id) -> Result<Vec<Nid>, Error>;
 
 	// mark this group as pending leave for myself; once my own LEAVE message arrives, delete it completely
 	async fn mark_as_pending_leave(&self, guid: Id, pending: bool, req_id: Id);
@@ -258,33 +259,36 @@ where
 		let epoch = remove.cti.epoch;
 		let guid = remove.cti.guid;
 		let mut group = self.storage.get_latest_epoch(guid).await?;
+		let pending_removes = self.storage.get_pending_removes(guid).await?;
 
 		match epoch.cmp(&group.epoch()) {
 			// an outdated epoch
 			Less => {
 				if sender == receiver {
-					if remove.delegated {
-						// I tried fulfilling a LEAVE request, but someone's commit came first
-						// no worries, it will handled later, if so required
+					// replacing the sender by a malicious backend won't cause any harm: someone else's removal won't be found locally in my database,
+					// and others won't be able to decrypt it since the sender is signed and hashed along with the entire payload
+
+					// only resend manually triggered removals and ignnore pending_removes
+					// if one of the proposals is not found, the backend is trying to mess up with me – ignore
+					// if one of the evictees leaves while this removal is being resent, he'll be handled later as pending_remove
+					let nids = future::try_join_all(
+						remove
+							.props
+							.props
+							.into_iter()
+							.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+					)
+					.await?
+					.into_iter()
+					.filter_map(|fp| match fp.prop {
+						Proposal::Remove { id } if !pending_removes.contains(&id) => Some(id),
+						_ => None,
+					})
+					.collect::<Vec<Nid>>();
+
+					if nids.is_empty() {
 						Ok(None)
 					} else {
-						// I triggered this REMOVE, so I need to keep sending it until it's accepted
-						// I can't decrypt my own props/comits of this REMOVE, but I stored them previously anyway
-						let nids = future::try_join_all(
-							remove
-								.props
-								.props
-								.into_iter()
-								.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
-						)
-						.await?
-						.into_iter()
-						.filter_map(|fp| match fp.prop {
-							Proposal::Remove { id } => Some(id),
-							_ => None,
-						})
-						.collect::<Vec<Nid>>();
-
 						// while sender is the same as receiver here, I'm emphasizing it is *I* who's removing now
 						// FIXME: should I get all nids for each nid and filter already removed ones to pass them to remove?
 						Ok(self.remove(&nids, receiver, guid).await)
@@ -302,16 +306,16 @@ where
 						.props
 						.into_iter()
 						.map(|p| {
-							group.decrypt(p.clone(), ContentType::Propose, &sender).or(Err(
-								Error::FailedToDecrypt {
+							group
+								.decrypt(p.clone(), ContentType::Propose, &sender)
+								.or(Err(Error::FailedToDecrypt {
 									id: p.content_id,
 									content_type: ContentType::Propose,
 									sender,
 									guid,
 									epoch,
 									ctx: "handle_remove: prop".to_string(),
-								},
-							))
+								}))
 						})
 						.collect::<Result<Vec<FramedProposal>, Error>>()?;
 					let fc = group
@@ -325,6 +329,21 @@ where
 							ctx: "handle_remove: commit".to_string(),
 						}))?;
 
+					// ensure the sender has access to commit all the announced proposals
+					let fps = fps.into_iter().filter_map(|fp| match fp.prop {
+						Proposal::Remove { id }
+						// TODO: check access rules
+						// TODO: distinguish remove type with an enum: Delegated, DetachDevice, Evict
+						if pending_removes.contains(&id) || sender.is_same_id(&id) /* || can_nid_remove_nid(sender, nid, group) */ =>
+						{
+							Some(fp)
+						}
+						_ => None,
+					})
+					.collect::<Vec<FramedProposal>>();
+
+					// should I distinguish "Alice left" vs "Alice was removed by Bob"?
+					// Also, if just a device is remove (not the whole account), no need to display anything
 					if let Some(new_group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
 						// decryption changes the inner chains, so always save to achieve FS
 						self.save_group(&group).await;
@@ -347,6 +366,9 @@ where
 					.await?;
 					let fc = self.storage.get_commit(remove.cti.content_id).await?;
 
+					// TODO: respect remove type (delegated, detached, evicted) here as well
+
+					// is it required to check my own access rules? If I fake this remove, others won't accept it anyway
 					// no need to save the old group here, since it hasn't changed (nothing was decrypted & processing is immutable)
 					if let Some(new_group) = group.process(&fc, remove.ctd.as_ref(), &fps)? {
 						self.save_group(&new_group).await;
@@ -498,7 +520,9 @@ where
 					} else {
 						// someone else is leaving, so mark him as pending_remove and maybe remove during one of the consequent updates
 						self.save_group(&group).await;
-						self.storage.mark_as_pending_remove(guid, true, sender).await;
+						self.storage
+							.mark_as_pending_remove(guid, true, sender)
+							.await;
 
 						// msg can be used to display the sender's farewell in the chat, if specified
 						Ok(Some(msg))
@@ -511,7 +535,7 @@ where
 						sender,
 						guid,
 						epoch,
-						ctx: "handle_leave".to_string()
+						ctx: "handle_leave".to_string(),
 					})
 				}
 			}
@@ -569,11 +593,16 @@ where
 	}
 
 	// NOTE: this should be the only interface to remove nids from groups; if a nid is deactivated or something,
+	// NOTE: when unlocking, it is required to check for all deactivated accounts first and only then connect to the socket API for consistency! – otherwise
+	// one coiuld receive a remove for a pending_remove account (deactivated), which is not yet marked as pending_remove
 	// an external event should trigger this call
 	// it is possible nids are already remove, hence Option
 	// if one is deactivated, mark him as pending_delete
 	// if one manually removes one of his devices, he should manually send a SendRemove message
 	pub async fn remove(&self, nids: &[Nid], sender: Nid, guid: Id) -> Option<transport::Send> {
+		// I can delete one of my devices
+		// others can't delete just one device – they should use nids_for_nid
+
 		// when one disables one of his devices, he should manually remove it by sending SendRemove; hence, do not use nids_for_nids!
 		// should I use nids_for_nids here at all? if I miss a device, my commit will be rejected
 		// 1 reframe the proposals to resign/recrypt and filter unnecessary ones
@@ -760,6 +789,7 @@ where
 	// keep in mind, each nid is simply a concatenation of CID & device_number, eg ABCDEFGH42, so no `:` is used
 	// TODO: do I need to additionally save group meta context, eg name, description, roles, etc?
 	async fn save_group(&self, group: &Group) {
+		// TODO: add a flag to clear all previous epochs and remove commits and proposals?
 		let roster: Vec<Nid> = group.roster().ids();
 		self.storage
 			.save_group(
