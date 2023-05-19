@@ -240,6 +240,15 @@ message SendEdit {
 }
 
 message SendInvite {
+	// in a group of a and b, where c and d are invited, it is important to keep the total order for everyone the same:
+	// a and b get ReceiveAdd (ra) first and THEN other messages if any sent, while c and d – ReceivedWelcome (rw) and THEN other messages
+	// a	b	 c	d
+	// ra	ra rw	rw
+	// m1	m1 m1	m1
+	// m2	m2 m2	m2
+	// ...........
+	// mn mn mn	mn
+	
 	// for the backend to fanout this:
 	// wctds.for_each(|ctd| {
 	//	send_to(ctd.user_id, Received { ReceivedWlcm { wcti, ctd.ctd, ctd.kp_id } })
