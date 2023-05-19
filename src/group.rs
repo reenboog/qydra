@@ -1639,6 +1639,137 @@ mod tests {
 	}
 
 	#[test]
+	fn test_process_someone_elses_commit() {
+		let seed = [12u8; 16];
+		let alice_ekp = ilum::gen_keypair(&seed);
+		let alice_x448_kp = x448::KeyPair::generate();
+		let alice_skp = dilithium::KeyPair::generate();
+		let alice_id = Nid::new(b"aliceali", 0);
+		let alice = Owner {
+			id: alice_id.clone(),
+			kp: KeyPackage::new(
+				&alice_ekp.pk,
+				&alice_x448_kp.public,
+				&alice_skp.public,
+				&alice_skp.private,
+			),
+			ilum_dk: alice_ekp.sk,
+			x448_dk: alice_x448_kp.private,
+			ssk: alice_skp.private,
+		};
+
+		let mut alice_group = Group::create(seed, alice);
+
+		let bob_id = Nid::new(b"bobbobbo", 0);
+		let bob_user_ekp = ilum::gen_keypair(&seed);
+		let bob_x448_kp = x448::KeyPair::generate();
+		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_kp = KeyPackage::new(
+			&bob_user_ekp.pk,
+			&bob_x448_kp.public,
+			&bob_user_skp.public,
+			&bob_user_skp.private,
+		);
+		let (add_bob_prop, _) = alice_group
+			.propose_add(bob_id, bob_user_kp.clone())
+			.unwrap();
+		// alice invite using her initial group
+		let (fc, _, ctds, wlcms) = alice_group.commit(&[add_bob_prop.clone()]).unwrap();
+
+		// and get alice_group
+		let mut alice_group = alice_group
+			.process(&fc, ctds.get(0).unwrap().ctd.as_ref(), &[add_bob_prop])
+			.unwrap()
+			.unwrap();
+
+		// bob joins
+		let mut bob_group = Group::join(
+			&bob_id,
+			&bob_user_kp,
+			&bob_user_ekp.sk,
+			&bob_x448_kp.private,
+			&bob_user_skp.private,
+			&seed,
+			&wlcms.clone().unwrap().0,
+			&wlcms.unwrap().1.get(0).unwrap().ctd,
+		)
+		.unwrap();
+
+		let charlie_id = Nid::new(b"charliec", 0);
+		let charlie_user_ekp = ilum::gen_keypair(&seed);
+		let charlie_x448_kp = x448::KeyPair::generate();
+		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_kp = KeyPackage::new(
+			&charlie_user_ekp.pk,
+			&charlie_x448_kp.public,
+			&charlie_user_skp.public,
+			&charlie_user_skp.private,
+		);
+		// keep alice's pk to ensure her ignored future proposal wont' change it
+		let alice_pk = alice_group
+			.roster
+			.get(&Nid::new(b"aliceali", 0))
+			.unwrap()
+			.clone();
+
+		// bob proposes to add charlie
+		let (add_charlie_prop, _) = bob_group
+			.propose_add(charlie_id, charlie_user_kp.clone())
+			.unwrap();
+		let (update_alice_prop, _) = alice_group.propose_update();
+		let (update_bob_prop, _) = bob_group.propose_update();
+
+		// alice commits her update only
+		let _ = alice_group.commit(&[update_alice_prop.clone()]).unwrap();
+
+		// bob commits his update and adds charlie
+		let (fc, fc_ct, ctds, _) = bob_group
+			.commit(&[add_charlie_prop.clone(), update_bob_prop.clone()])
+			.unwrap();
+		let alice_fc = alice_group
+			.decrypt(fc_ct, ContentType::Commit, &bob_id)
+			.unwrap();
+		// alice processes bob's commit
+		let alice_group = alice_group
+			.process(
+				&alice_fc,
+				ctds.first().unwrap().ctd.as_ref(),
+				&[add_charlie_prop.clone(), update_bob_prop.clone()],
+			)
+			.unwrap()
+			.unwrap();
+		let bob_group = bob_group
+			.process(
+				&fc,
+				ctds.get(1).unwrap().ctd.as_ref(),
+				&[update_bob_prop, add_charlie_prop],
+			)
+			.unwrap()
+			.unwrap();
+
+		assert_eq!(alice_group.uid, bob_group.uid);
+		assert_eq!(alice_group.epoch, bob_group.epoch);
+		assert_eq!(alice_group.conf_trans_hash, bob_group.conf_trans_hash);
+		assert_eq!(alice_group.interim_trans_hash, bob_group.interim_trans_hash);
+		assert_eq!(alice_group.roster, bob_group.roster);
+		assert_eq!(
+			alice_group.pending_commits.len(),
+			bob_group.pending_commits.len()
+		);
+		assert_eq!(
+			alice_group.pending_updates.len(),
+			bob_group.pending_updates.len()
+		);
+		assert_eq!(alice_group.secrets, bob_group.secrets);
+
+		// ensure alice's pk hasn't changed
+		assert_eq!(
+			alice_group.roster.get(&Nid::new(b"aliceali", 0)).unwrap(),
+			&alice_pk
+		);
+	}
+
+	#[test]
 	fn test_rekey() {
 		// TODO: implement
 		// ensure ssk is updated as well
