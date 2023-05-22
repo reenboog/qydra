@@ -47,6 +47,7 @@ pub enum Error {
 	WrongKeyPackageIdSize,
 	BadSendCommitFormat,
 	BadSendLeaveFormat,
+	BadSendAdmitFormat,
 	BadSendAddFormat,
 	BadSendInviteFormat,
 	BadSendRemoveFormat,
@@ -59,6 +60,7 @@ pub enum Error {
 	BadReceivedLeaveFormat,
 	BadReceivedProposalFormat,
 	BadReceivedAddFormat,
+	BadReceivedAdmitFormat,
 	BadReceivedRemoveFormat,
 	BadReceivedEditFormat,
 	BadReceivedFormat,
@@ -1139,6 +1141,45 @@ impl Deserializable for transport::SendLeave {
 	}
 }
 
+// SendAdmit
+impl From<&transport::SendAdmit> for SendAdmit {
+	fn from(val: &transport::SendAdmit) -> Self {
+		Self {
+			greeting: (&val.greeting).into(),
+		}
+	}
+}
+
+impl Serializable for transport::SendAdmit {
+	fn serialize(&self) -> Vec<u8> {
+		SendAdmit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<SendAdmit> for transport::SendAdmit {
+	type Error = Error;
+
+	fn try_from(val: SendAdmit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			greeting: val
+				.greeting
+				.try_into()
+				.or(Err(Error::BadCiphertextFormat))?,
+		})
+	}
+}
+
+impl Deserializable for transport::SendAdmit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(SendAdmit::decode(buf).or(Err(Error::BadSendAdmitFormat))?)
+	}
+}
+
 // SendAdd
 impl From<&transport::SendAdd> for SendAdd {
 	fn from(val: &transport::SendAdd) -> Self {
@@ -1428,6 +1469,7 @@ impl From<&transport::Send> for Send {
 		Self {
 			variant: Some(match val {
 				transport::Send::Invite(i) => Variant::Invite(SendInvite::from(i)),
+				transport::Send::Admit(a) => Variant::Admit(SendAdmit::from(a)),
 				transport::Send::Remove(r) => Variant::Remove(SendRemove::from(r)),
 				transport::Send::Edit(e) => Variant::Edit(SendEdit::from(e)),
 				transport::Send::Props(p) => Variant::Props(SendProposal::from(p)),
@@ -1454,6 +1496,7 @@ impl TryFrom<Send> for transport::Send {
 
 		Ok(match val.variant.ok_or(Error::BadSendFormat)? {
 			Variant::Invite(i) => Invite(i.try_into()?),
+			Variant::Admit(a) => Admit(a.try_into()?),
 			Variant::Remove(r) => Remove(r.try_into()?),
 			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
@@ -1793,6 +1836,7 @@ impl From<&transport::Received> for Received {
 			variant: Some(match val {
 				transport::Received::Welcome(w) => Variant::Wlcm(w.into()),
 				transport::Received::Add(a) => Variant::Add(a.into()),
+				transport::Received::Admit(a) => Variant::Admit(a.into()),
 				transport::Received::Remove(r) => Variant::Remove(r.into()),
 				transport::Received::Edit(e) => Variant::Edit(e.into()),
 				transport::Received::Props(p) => Variant::Props(p.into()),
@@ -1820,6 +1864,7 @@ impl TryFrom<Received> for transport::Received {
 		Ok(match val.variant.ok_or(Error::BadReceivedFormat)? {
 			Variant::Wlcm(w) => Welcome(w.try_into()?),
 			Variant::Add(a) => Add(a.try_into()?),
+			Variant::Admit(a) => Admit(a.try_into()?),
 			Variant::Remove(r) => Remove(r.try_into()?),
 			Variant::Edit(e) => Edit(e.try_into()?),
 			Variant::Props(p) => Props(p.try_into()?),
@@ -2489,6 +2534,30 @@ mod tests {
 		let deserialized = transport::SendLeave::deserialize(&serialized);
 
 		assert_eq!(Ok(sl), deserialized);
+	}
+
+	#[test]
+	fn test_send_admit() {
+		let ct = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: dilithium::Signature::new([90u8; 4595]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let sm = transport::SendMsg {
+			payload: ct,
+			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
+		};
+		let sa = transport::SendAdmit { greeting: sm };
+		let serialized = sa.serialize();
+		let deserialized = transport::SendAdmit::deserialize(&serialized);
+
+		assert_eq!(Ok(sa), deserialized);
 	}
 
 	#[test]

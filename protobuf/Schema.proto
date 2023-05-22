@@ -228,6 +228,12 @@ message SendLeave {
 	required SendMsg farewell = 1;
 }
 
+message SendAdmit {
+	// sent to each newly invited user by the inviter once the commit is accepted and processed; until then,
+	// invitees MUST process all messages, but not send anything and not anyhow react; ideally the group should be hidden
+	required SendMsg greeting = 1;
+}
+
 message SendAdd {
 	// commit & each prop is sent to commit.ctds.user_id
 	repeated Ciphertext props = 1;
@@ -271,18 +277,20 @@ message Send {
 	oneof variant {
 		// a combined (props, commit)
 		SendInvite invite = 1;
+		// allows invitees to actually use the group (should process all incomings, but be hidden until then)
+		SendAdmit admit = 2;
 		// a combined (props, commit)
-		SendRemove remove = 2;
+		SendRemove remove = 3;
 		// policy update, name/description change – anything
-		SendEdit edit = 3;
+		SendEdit edit = 4;
 		// usually just update proposals, but can be more generic
-		SendProposal props = 4; 
+		SendProposal props = 5; 
 		// update commit, but can be more generic
-		SendCommit commit = 5; 
+		SendCommit commit = 6; 
 		// a request to leave the group
-		SendLeave leave = 6;
+		SendLeave leave = 7;
 		// an arbitrary app message
-		SendMsg msg = 7;
+		SendMsg msg = 8;
 	}
 }
 
@@ -326,16 +334,17 @@ message Received {
 	oneof variant {
 		ReceivedWelcome wlcm = 1;
 		ReceivedAdd add = 2;
-		ReceivedRemove remove = 3;
-		ReceivedEdit edit = 4;
+		Ciphertext admit = 3;
+		ReceivedRemove remove = 4;
+		ReceivedEdit edit = 5;
 		// update proposals, but can be more generic
-		ReceivedProposal props = 5;
+		ReceivedProposal props = 6;
 		// update commit, but can be more generic
-		ReceivedCommit commit = 6;
+		ReceivedCommit commit = 7;
 		// a request to leave, contains a farewell message (Msg)
-		Ciphertext leave = 7;
+		Ciphertext leave = 8;
 		// an arbitrary app message
-		Ciphertext msg = 8;
+		Ciphertext msg = 9;
 	}
 }
 

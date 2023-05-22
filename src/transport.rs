@@ -51,9 +51,15 @@ pub struct SendLeave {
 	pub farewell: SendMsg,
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub struct SendAdmit {
+	pub greeting: SendMsg,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Send {
 	Invite(SendInvite),
+	Admit(SendAdmit),
 	Remove(SendRemove),
 	Edit(SendEdit),
 	Props(SendProposal),
@@ -104,6 +110,7 @@ pub struct ReceivedEdit {
 pub enum Received {
 	Welcome(ReceivedWelcome),
 	Add(ReceivedAdd),
+	Admit(Ciphertext),
 	Remove(ReceivedRemove),
 	Edit(ReceivedEdit),
 	Props(ReceivedProposal),
