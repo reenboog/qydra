@@ -235,7 +235,7 @@ message SendAdmit {
 }
 
 message SendAdd {
-	// commit & each prop is sent to commit.ctds.user_id
+	// commit & each prop are sent to commit.ctds.user_id as ReceivedAdd { ReceivedProposal { props }, ReceivedCommit { commit.cti, commit.ctds[user_id] } }
 	repeated Ciphertext props = 1;
 	required SendCommit commit = 2;
 }
@@ -260,6 +260,7 @@ message SendInvite {
 	//	send_to(ctd.user_id, Received { ReceivedWlcm { wcti, ctd.ctd, ctd.kp_id } })
 	// })
 	// welcome cti
+	// TODO: dilithium-sign wcti
 	required WlcmCti wcti = 1;
 	// welcome ctds
 	repeated WlcmCtd wctds = 2;

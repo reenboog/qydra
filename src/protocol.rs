@@ -9,8 +9,8 @@
 	d ----m1------>		|		m3	m3 	m3	m3	..	m3
 
 	It is possible for a SendInvite to be outdated, but the invitees wouldn't know: the current roster always receives ReceivedAdd while the invites – ReceivedWelcome.
-	To address that, the invites are to mark the group as pending_approval and prevent sending (or simply hide it from the UI), but to process all incoming messages.
-	The inviter, on the other hand, is to send such SendApprove to the invites once his SendInvite is proccessed.
+	To address that, the invites are to mark the group as pending_admit and prevent sending (and/or hide it from the UI), but to always process all incoming messages.
+	The inviter, on the other hand, is to send such SendAdmit to the invitees once his SendInvite (its ReceivedAdd variant) is proccessed
 
 	Add and remove proposals are to be embedded in a commit to avoid state loss: say, Alice commits [upd_a, upb_b, upd_c] @ epoch 5
 	while Charlie invites Dan at the same epoch. What should happen when Alice's commit is applied and produces epoch 6 while Charlie's
@@ -20,10 +20,12 @@
 	a commit things become easier to handle (no resending logic) and "atomic". Such a message is implemented in Schema.proto as SendInvite/SendAdd.
 
 	When a device/account is deleted, the backend could respond to users' messages by attaching a nack(user_deleted=[ids]), so that
-	one could send a proposal-commit pair in order to fix the roster. –Actually, an external event should trigger remove(nids), eg an http call, etc
+	one could send a proposal-commit pair in order to fix the roster. –Actually, an external event should trigger remove(nids), eg an http call, etc. For that
 
 	An update strategy could be to send an update every 10 messages and commit after 5 messages after that.
 	Hence, send_msg should return an optional Update/Commit.
+
+	It is important to include pending_remove-s, if any, when inviting new members, since that state is not shared.
 */
 
 /*
@@ -39,7 +41,7 @@ use futures::future;
 use crate::{
 	ciphertext::{Ciphertext, ContentType},
 	commit::FramedCommit,
-	group::{self, Group, Owner},
+	group::{Group, Owner},
 	id::Id,
 	key_package::KeyPackage,
 	msg::Msg,
@@ -54,17 +56,25 @@ pub const ILUM_SEED: &[u8; 16] =
 
 #[derive(Debug)]
 pub enum Error {
-	FailedToCreate,
 	// the app is locked, retry later
 	DbLocked,
 	KeyPackageNotFound(Id),
-	GroupAlreadyExists(Id),
+	FailedToJoin,
+	GroupAlreadyExists {
+		guid: Id,
+		epoch: u64,
+		invited_to_epoch: u64,
+	},
 	NoGroupFound(Id),
-	GroupCantBeEmpty,
+	NoEmptyGroupsAllowed,
+	CantCreate {
+		ctx: String,
+	},
 	// there's no way to process and recover from this; REINIT
 	TooNewEpoch {
 		epoch: u64,
 		current: u64,
+		guid: Id,
 	},
 	// decryption failure
 	FailedToDecrypt {
@@ -75,25 +85,38 @@ pub enum Error {
 		epoch: u64,
 		ctx: String,
 	},
-	// should never happend
-	FailedToProcessOwnCommit {
+	FailedToProcessCommit {
 		ctx: String,
 	},
-	NoUserInGroup {
+	NoSuchUserInGroup {
 		nid: Nid,
 		guid: Id,
 	},
+	// we're invited, but can't do anything until Admit is received
+	PendingAdmit {
+		guid: Id,
+	},
+	// admission message decrypted, but cross check failed
+	UnknownAdmit {
+		guid: Id,
+		greeting: Vec<u8>,
+	},
+	NeedsResend(transport::Send),
+	// nids might already be added/removed
+	NoChangeRequired {
+		guid: Id,
+		ctx: String,
+	},
+	// someone else's outdated commit, should be ignored
+	OutdatedCommit {
+		guid: Id,
+		sender: Nid,
+		epoch: u64,
+		ctx: String,
+	},
 }
 
-impl From<group::Error> for Error {
-	fn from(val: group::Error) -> Self {
-		match val {
-			// FIXME: implement!
-			_ => Error::FailedToCreate,
-		}
-	}
-}
-
+// should contain Vec<transport::Send>
 pub struct Encrypted {
 	// actual payload to send
 	pub send: transport::Send,
@@ -101,10 +124,37 @@ pub struct Encrypted {
 	pub update: Option<transport::Send>,
 }
 
-pub struct Decrypted {
-	pub pt: Vec<u8>,
-	// if LEAVE is implemented this could be used to remove that peer: sign(sign("leave", server_ssk), user_ssk)
-	// pub pending_leave: Option<SendRemove>,
+pub enum Processed {
+	Welcome,
+	Admit,
+	Add(OnAdd),
+	Remove(OnRemove),
+	// if farewell is Some, someone left; otherwise – me
+	Leave { farewell: Option<Msg> },
+}
+
+pub struct OnAdd {
+	// the new members
+	pub joined: Vec<Nid>,
+	// lefties from a previous epoch
+	pub left: Vec<Nid>,
+	// I should not only add, but also admit; None, if not my add
+	pub admit: Option<transport::Send>,
+}
+
+pub struct OnRemove {
+	// explicitly removed nids; if contains(my_nid), I'm removed
+	pub evicted: Vec<Nid>,
+	// lefties from a previous epoch
+	pub left: Vec<Nid>,
+	// detached devices; if contains(my_nid), I'm detached (= removed)
+	pub detached: Vec<Nid>,
+}
+
+pub struct OnHandle {
+	sender: Nid,
+	guid: Id,
+	outcome: Processed,
 }
 
 #[async_trait]
@@ -123,7 +173,7 @@ pub trait Storage {
 		roster: Vec<&Nid>,
 	) -> Result<(), Error>;
 	// delete all epochs for this group, all framed commits, all pending_remove-s
-	async fn delete_group(&self, guid: &Id);
+	async fn delete_group(&self, guid: Id) -> Result<(), Error>;
 
 	// gets all nids for the specified nid; useful in case a device is added/remove between the tasks
 	async fn get_nids_for_nid(&self, nid: Nid) -> Result<Vec<Nid>, Error>;
@@ -152,11 +202,20 @@ pub trait Storage {
 		-> Result<(), Error>;
 	async fn is_pending_leave(&self, guid: Id, req_id: Id) -> Result<bool, Error>;
 
+	// ensure admit refers to both, the sender and the guid when implementing the ffi layer
+	async fn mark_as_pending_admit(
+		&self,
+		guid: Id,
+		sender: Nid,
+		pending: bool,
+	) -> Result<(), Error>;
+	async fn is_pending_admit(&self, guid: Id) -> Result<bool, Error>;
+
 	async fn get_group(&self, uid: &Id, epoch: u64) -> Result<Group, Error>;
 	async fn get_latest_epoch(&self, guid: Id) -> Result<Group, Error>;
 	// someone used my public keys to invite me
-	async fn get_my_prekey_bundle_by_id(&self, id: Id) -> Result<transport::KeyBundle, Error>;
-	async fn delete_my_prekey_bundle_by_id(&self, id: Id) -> Result<(), Error>;
+	async fn get_my_prekey_bundle(&self, id: Id) -> Result<transport::KeyBundle, Error>;
+	async fn delete_my_prekey_bundle(&self, id: Id) -> Result<(), Error>;
 	// my static qydra identity used to create all groups
 	// TODO: introduce an ephemeral package signed witha static identity?
 	// TODO: should it accept my Nid?
@@ -192,7 +251,11 @@ where
 			ssk,
 			svk,
 			sig,
-		} = self.storage.get_my_prekey_bundle_by_id(wlcm.kp_id).await?;
+		} = self.storage.get_my_prekey_bundle(wlcm.kp_id).await?;
+
+		// TODO: verify the inviter (sender) first (introduce a parameter)
+		// TODO: check whether the sender can invite me?
+		// wcti should be ecc-signed (implemented) & sign(ecc_sig + wlcm.hash) with dilithium
 
 		let group = Group::join(
 			&receiver,
@@ -208,36 +271,89 @@ where
 			ILUM_SEED,
 			&wlcm.cti,
 			&wlcm.ctd,
-		)?;
+		)
+		.or(Err(Error::FailedToJoin))?;
+		let guid = group.uid();
 
-		// no such group should exist yet
-		// TODO: there might be an "unapproved" group actually, so just delete it and save this new one
-		if let Err(Error::NoGroupFound(_)) = self.storage.get_latest_epoch(group.uid()).await {
-			// TODO: check if the sender can invite me
-			self.save_group(&group).await?;
+		match self.storage.get_latest_epoch(guid).await {
+			// it's ok to receive a welcome to an existing group as long as we're not yet admitted
+			// AND the new group's epoch is larger than what's stored locally – just delete it, if any
+			Ok(existing_group) => {
+				if self.storage.is_pending_admit(guid).await?
+					&& group.epoch() > existing_group.epoch()
+				{
+					self.storage.delete_group(guid).await
+				} else {
+					Err(Error::GroupAlreadyExists {
+						guid,
+						epoch: existing_group.epoch(),
+						invited_to_epoch: group.epoch(),
+					})
+				}
+			}
+			Err(Error::NoGroupFound(..)) => Ok(()),
+			Err(err) => Err(err),
+		}?;
 
-			Ok(())
-		} else {
-			Err(Error::GroupAlreadyExists(group.uid()))
-		}
+		self.save_group(&group).await?;
+		self.storage.mark_as_pending_admit(guid, sender, true).await
 	}
 
-	// returns Send { SendAdd { .. } }, if this ADD was triggered by me, but someone else's comit came first
-	// or Send { SendRemove { .. } }, if there are still pending_removes and if it's my ADD, since the newcomers won't have that info
-	// and we want the group to sync as soon as possible; otherwise the joined ones would see pending_removes as active for some time
-	// but then from their perspective, I won't be able to do that (access rules)
+	async fn handle_admit(
+		&self,
+		admit: Ciphertext,
+		sender: Nid,
+		receiver: Nid,
+	) -> Result<(), Error> {
+		let guid = admit.guid;
+		let epoch = admit.epoch;
+		let id = admit.content_id;
+		let mut group = self.storage.get_group(&guid, epoch).await?;
+
+		// I won't be able to decrypt my own admission anyway
+		if sender != receiver {
+			let Msg(greeting) = group
+				.decrypt::<Msg>(admit, ContentType::Msg, &sender)
+				.or(Err(Error::FailedToDecrypt {
+					id,
+					content_type: ContentType::Msg,
+					sender,
+					guid,
+					epoch,
+					ctx: "admit".to_string(),
+				}))?;
+
+			self.save_group(&group).await?;
+
+			// admssion should refer to the grop its admitting to
+			if greeting == guid.as_bytes() {
+				self.storage
+					.mark_as_pending_admit(guid, sender, false)
+					.await?;
+			} else {
+				return Err(Error::UnknownAdmit { guid, greeting });
+			}
+		}
+
+		Ok(())
+	}
+
+	// Some(OnAdd) for processed adds, None for someone else's outdated commits,
+	// Error::NeedsResend for my outdated commit; if OnAdd::admit is Some, send it
+	// may contain Remove proposals, in case pending_removes are present
 	async fn handle_add(
 		&self,
 		add: transport::ReceivedAdd,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<Option<transport::Send>, Error> {
+	) -> Result<OnAdd, Error> {
 		use std::cmp::Ordering::*;
 
 		let epoch = add.commit.cti.epoch;
 		let guid = add.commit.cti.guid;
 		let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
 
+		// this add might arrive after nid is added AND removed (almost impossible), but we're ok with that
 		// *-------------------------------->
 		// a, u, m, m, q, u, u, r, a, m, u, m
 		match epoch.cmp(&latest_epoch.epoch()) {
@@ -257,26 +373,171 @@ where
 					})
 					.collect::<Vec<(Nid, Option<KeyPackage>)>>();
 
-					self.add(&invitees, sender, guid).await
+					Err(Error::NeedsResend(self.add(&invitees, sender, guid).await?))
 				} else {
-					Ok(None)
+					Err(Error::OutdatedCommit {
+						guid,
+						sender,
+						epoch,
+						ctx: "ADD".to_string(),
+					})
 				}
 			}
 			Equal => {
-				// 1 if props.cotnain(remove)
-				//	if me or my id -> delete
-				//	else mark as not pending remove
-				// 2 send "approved" to the added peers or to everyone?
-				// but I actually should not care, since only pending_removes are removed during the add phase
-				// and I should have left (and mo other devices) long before this
-				// but I do need to collect who was removed to display "Alice left"
-				// remove proposals and the commit, if I'm the sender
+				// ensure the sender has access to commit all the announced proposals; otherwise, processing will fail
+				// also collect some meta info for the UI layer, eg: nid-a added nid-b, nid-c left, etc
 
-				// IMPORTANT: *I* must add my own devices, not somebody else!
-				// if my commit, fetch props and commit from the db
-				// TODO: mark as not removed anymore
-				// TODO: should I check if sender is trying to add only one device of someone else to enforce the "only I can add my stuff" policy?
-				Ok(None)
+				struct Diff {
+					props: Vec<FramedProposal>,
+					joined: Vec<Nid>,
+					left: Vec<Nid>,
+				}
+
+				let pending_removes = self.storage.get_pending_removes(guid).await?;
+				let filter_map_props = |fps: Vec<FramedProposal>| -> Diff {
+					let mut joined = Vec::new();
+					let mut left = Vec::new();
+					let props = fps
+						.into_iter()
+						.filter_map(|fp| match fp.prop {
+						Proposal::Remove { id }
+						// pending removes are ok when adding someone
+						if pending_removes.contains(&id) =>
+						{
+							left.push(id);
+
+							Some(fp)
+						},
+						// TODO: should I check if sender is trying to add only one device of someone else to enforce the "only I can add my stuff" policy?
+						Proposal::Add { id, .. } if true /* FIXME: implement can_nid_add_nid(sender, id) */ => {
+							joined.push(id);
+
+							Some(fp)
+						}
+						_ => None,
+					})
+						.collect();
+
+					Diff {
+						props,
+						joined,
+						left,
+					}
+				};
+
+				// (Option<transport::Send { Admit { .. } }>, fps)
+				let fps = if sender != receiver {
+					// it's someone else's ADD, so I need to decrypt both, the props and the commit, then process
+					let fps = filter_map_props(
+						add.props
+							.props
+							.into_iter()
+							.map(|p| {
+								latest_epoch
+									.decrypt(p.clone(), ContentType::Propose, &sender)
+									.or(Err(Error::FailedToDecrypt {
+										id: p.content_id,
+										content_type: ContentType::Propose,
+										sender,
+										guid,
+										epoch,
+										ctx: "handle_add: prop".to_string(),
+									}))
+							})
+							.collect::<Result<Vec<FramedProposal>, Error>>()?,
+					);
+					let fc = latest_epoch
+						.decrypt::<FramedCommit>(
+							add.commit.cti.clone(),
+							ContentType::Commit,
+							&sender,
+						)
+						.or(Err(Error::FailedToDecrypt {
+							id: add.commit.cti.content_id,
+							content_type: ContentType::Commit,
+							sender,
+							guid,
+							epoch,
+							ctx: "handle_add: commit".to_string(),
+						}))?;
+
+					// decryption changes the inner chains, so always save to achieve FS
+					self.save_group(&latest_epoch).await?;
+
+					if let Ok(Some(new_group)) =
+						latest_epoch.process(&fc, Some(add.commit.ctd).as_ref(), &fps.props)
+					{
+						// we have a new epoch, so save this new group as well
+						self.save_group(&new_group).await?;
+
+						// I processed someone else's Add, so there's nothing else left to do
+						Ok((None, fps))
+					} else {
+						// those who left, won't receive this, explicit removes are not allowed here,
+						// so None when processing means error here
+						Err(Error::FailedToProcessCommit {
+							ctx: format!(
+								"ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
+								guid, epoch, sender
+							),
+						})
+					}
+				} else {
+					let fps = filter_map_props(
+						future::try_join_all(
+							add.props
+								.props
+								.into_iter()
+								.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+						)
+						.await?,
+					);
+					let fc = self
+						.storage
+						.get_commit(add.commit.cti.content_id, epoch, guid)
+						.await?;
+
+					// no need to save the old group here, since it hasn't changed (nothing was decrypted & processing is immutable)
+					if let Ok(Some(mut new_group)) =
+						latest_epoch.process(&fc, Some(add.commit.ctd).as_ref(), &fps.props)
+					{
+						// admit the newcomers; can be sent to the invitees only, but it's ok as is
+						let admit = transport::Send::Admit(transport::SendAdmit {
+							greeting: transport::SendMsg {
+								// guid is used as a greeting for the purpose of a cross check
+								payload: new_group
+									.encrypt(&Msg(guid.as_bytes().to_vec()), ContentType::Msg),
+								recipients: new_group.roster().ids(),
+							},
+						});
+
+						self.save_group(&new_group).await?;
+
+						Ok((Some(admit), fps))
+					} else {
+						Err(Error::FailedToProcessCommit {
+							ctx: format!(
+								"own ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
+								guid, epoch, sender
+							),
+						})
+					}
+				}?;
+
+				// mark the removed nids as not pending remove, had they ever been marked
+				future::try_join_all(
+					fps.1
+						.left
+						.iter()
+						.map(|nid| self.storage.mark_as_pending_remove(guid, false, *nid)),
+				)
+				.await?;
+
+				Ok(OnAdd {
+					joined: fps.1.joined,
+					left: fps.1.left,
+					admit: fps.0,
+				})
 			}
 			Greater => {
 				// the only explanation is the server lost part of its state and I missed a few commits before this one
@@ -284,19 +545,19 @@ where
 				Err(Error::TooNewEpoch {
 					epoch,
 					current: latest_epoch.epoch(),
+					guid,
 				})
 			}
 		}
 	}
 
-	// returns Option<Send { SendRemove { .. } }>, if this REMOVE was triggered by me, but someone else's commit came first
-	// if nids are already removed by now, Option is used to do nothing
+	// Some(OnRemove) for processed removes, None for someone else's outdated commits
 	async fn handle_remove(
 		&self,
 		sender: Nid,
 		remove: transport::ReceivedRemove,
 		receiver: Nid,
-	) -> Result<Option<transport::Send>, Error> {
+	) -> Result<OnRemove, Error> {
 		use std::cmp::Ordering::*;
 
 		let epoch = remove.cti.epoch;
@@ -330,14 +591,72 @@ where
 					.collect::<Vec<Nid>>();
 
 					// while sender is the same as receiver here, I'm emphasizing it is *I* who's removing now
-					self.remove(&nids, receiver, guid).await
+					Err(Error::NeedsResend(
+						self.remove(&nids, receiver, guid).await?,
+					))
 				} else {
 					// it's someone else's outdated remove – they'll resend it later, if need be
-					Ok(None)
+					Err(Error::OutdatedCommit {
+						guid,
+						sender,
+						epoch,
+						ctx: "REMOVE".to_string(),
+					})
 				}
 			}
 			Equal => {
-				let fps = if sender != receiver {
+				// ensure the sender has access to commit all the announced proposals; otherwise, processing will fail
+				// also collect some meta info for the UI layer, eg: nid-a removed nid-b, nid-c left, etc
+				struct Diff {
+					props: Vec<FramedProposal>,
+					left: Vec<Nid>,
+					detached: Vec<Nid>,
+					evicted: Vec<Nid>,
+				}
+
+				let pending_removes = self.storage.get_pending_removes(guid).await?;
+				let filter_map_props = |fps: Vec<FramedProposal>| -> Diff {
+					let mut left = Vec::new();
+					let mut detached = Vec::new();
+					let mut evicted = Vec::new();
+					let props = fps
+						.into_iter()
+						.filter_map(|fp| {
+							if let Proposal::Remove { id } = fp.prop {
+								let is_pending_remove = pending_removes.contains(&id);
+								let is_same_sender_id = sender.is_same_id(&id);
+								let can_remove = true; // FIXME: implement can_nid_remove_nid(sender, nid, group)
+								// TODO: should I check if sender is trying to remove only one device of someone else
+								// to enforce the "only I can remove my stuff" policy?
+
+								if is_pending_remove {
+									left.push(id);
+								} else if is_same_sender_id {
+									detached.push(id);
+								} else {
+									evicted.push(id);
+								}
+
+								if is_pending_remove || is_same_sender_id || can_remove {
+									Some(fp)
+								} else {
+									None
+								}
+							} else {
+								None
+							}
+						})
+						.collect();
+
+					Diff {
+						props,
+						left,
+						detached,
+						evicted,
+					}
+				};
+
+				let (fps, fc) = if sender != receiver {
 					// it's someone else's REMOVE, so I need to decrypt both, the props and the commit, then process
 					let fps = remove
 						.props
@@ -367,33 +686,10 @@ where
 							ctx: "handle_remove: commit".to_string(),
 						}))?;
 
-					// ensure the sender has access to commit all the announced proposals; otherwise, processing will fail
-					let pending_removes = self.storage.get_pending_removes(guid).await?;
-					let fps = fps.into_iter().filter_map(|fp| match fp.prop {
-						Proposal::Remove { id }
-						// FIXME: check access rules & implement can_nid_remove_nid (move sender.is_same_id there as well)
-						// TODO: distinguish remove type with an enum: Delegated, DetachDevice, Evict
-						if pending_removes.contains(&id) || sender.is_same_id(&id) /* || can_nid_remove_nid(sender, nid, group) */ =>
-						{
-							Some(fp)
-						}
-						_ => None,
-					})
-					.collect::<Vec<FramedProposal>>();
+					// decryption changes the inner chains, so always save to preserve FS
+					self.save_group(&latest_epoch).await?;
 
-					// TODO: should I check if sender is trying to remove only one device of someone else to enforce the "only I can remove my stuff" policy?
-					// Also, if just a device is removed (not the whole account), no need to display anything
-					if let Some(new_group) = latest_epoch.process(&fc, remove.ctd.as_ref(), &fps)? {
-						// decryption changes the inner chains, so always save to achieve FS
-						self.save_group(&latest_epoch).await?;
-						// we have a new epoch, so save this new group as well
-						self.save_group(&new_group).await?;
-					} else {
-						// I was removed, so delete the group and all its state
-						self.delete_group(&guid).await?;
-					}
-
-					Ok(fps)
+					Ok((fps, fc))
 				} else {
 					let fps = future::try_join_all(
 						remove
@@ -408,41 +704,44 @@ where
 						.get_commit(remove.cti.content_id, epoch, guid)
 						.await?;
 
-					// TODO: respect remove type (delegated, detached, evicted) here as well
+					Ok((fps, fc))
+				}?;
 
-					// no need to check access rules here since remove() should do that anyway; if I fake fps, the state won't converge
-					// no need to save the old group here, since it hasn't changed (nothing was decrypted & processing is immutable)
-					if let Some(new_group) = latest_epoch.process(&fc, remove.ctd.as_ref(), &fps)? {
-						// save the new group
+				let diff = filter_map_props(fps);
+
+				match latest_epoch.process(&fc, remove.ctd.as_ref(), &diff.props) {
+					Ok(Some(new_group)) => {
+						// we have a new epoch, so save this new group as well
 						self.save_group(&new_group).await?;
-
-						// and remove props and commits
-						self.storage.delete_props(guid, epoch).await?;
-						self.storage.delete_commits(guid, epoch).await?;
-
-						Ok(fps)
-					} else {
-						Err(Error::FailedToProcessOwnCommit {
+					}
+					Ok(None) => {
+						// I was removed, so delete the group and all its state
+						self.delete_group(&guid).await?;
+					}
+					Err(_) => {
+						// something weird has just happened; not much to do, but log
+						return Err(Error::FailedToProcessCommit {
 							ctx: format!(
-								"REMOVE on guid: {:#?}, epoch: {}, sender: {:#?}",
+								"own ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
 								guid, epoch, sender
 							),
-						})
+						});
 					}
-				}?;
+				}
 
 				// mark the removed nids as not pending remove, had they ever been marked
 				future::try_join_all(
-					fps.into_iter()
-						.filter_map(|fp| match fp.prop {
-							Proposal::Remove { id } => Some(id),
-							_ => None,
-						})
-						.map(|id| self.storage.mark_as_pending_remove(guid, false, id)),
+					diff.left
+						.iter()
+						.map(|nid| self.storage.mark_as_pending_remove(guid, false, *nid)),
 				)
 				.await?;
 
-				Ok(None)
+				Ok(OnRemove {
+					evicted: diff.evicted,
+					left: diff.left,
+					detached: diff.detached,
+				})
 			}
 			Greater => {
 				// the only explanation is the server lost part of its state and I missed a few commits before this one
@@ -450,11 +749,13 @@ where
 				Err(Error::TooNewEpoch {
 					epoch,
 					current: latest_epoch.epoch(),
+					guid,
 				})
 			}
 		}
 	}
 
+	// enum OnEdit { Ok(guid), Resend(Send) }
 	async fn handle_edit(
 		&self,
 		edit: transport::ReceivedEdit,
@@ -466,8 +767,10 @@ where
 		// it is worth nothing, cases similar to "delayed remove/add" are possible when changing access rules:
 		// eg, a delayed revoke for a already revoked/re-granted token should not make sense and the other way around (grant )
 		// to address this properly, granted_at and revoked_at should be stored for each admin/owner
+		// mark as non pending?
 	}
 
+	// ()
 	async fn handle_props(
 		&self,
 		props: transport::ReceivedProposal,
@@ -475,8 +778,10 @@ where
 		receiver: Nid,
 	) -> Result<(), Error> {
 		todo!()
+		// mark as non pending?
 	}
 
+	// ()
 	// currently, only updates are processed here; adds & removes are handled separately
 	async fn handle_commit(
 		&self,
@@ -494,6 +799,7 @@ where
 		// if sender == receiver
 		//	my own commit, so	check commit.cti.content_id to get a local copy of FramedCommit
 		//	process(fc, commit.ctd)
+		// mark as non pending?
 
 		todo!()
 	}
@@ -520,6 +826,7 @@ where
 		// }
 
 		// TODO: how about admins?
+		// mark as non pending?
 
 		// Ok(pt.0)
 		Ok(())
@@ -543,7 +850,9 @@ where
 		let user = latest_epoch
 			.roster()
 			.get(&sender)
-			.ok_or(Error::NoUserInGroup { nid: sender, guid })?;
+			.ok_or(Error::NoSuchUserInGroup { nid: sender, guid })?;
+
+		// mark as non pending?
 
 		if epoch < user.joined_at_epoch {
 			// this user has been re-added since this leave was sent (an almost impossible case); no action required
@@ -595,83 +904,99 @@ where
 	}
 
 	// TODO: also, return an optional Send for either Update, Commit or SendRemove
-	pub fn send_msg(&self, sender: Nid, guid: Id, pt: &[u8]) -> Result<transport::Send, Error> {
-		// get most recent group
-		// encrypt the message
-		// build Send { SendMsg { Msg { .. }, recipients = .. } }
-		// FIXME: when it is time to update, check if there are pending_remove nids
-		// if yes, get all nids for each nid and issue a SendRemove instead of SendUpdate
-		// return SendSmg and Option<SendCommit>
-		todo!()
+	pub async fn send_msg(&self, guid: Id, pt: &[u8]) -> Result<transport::Send, Error> {
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			// get most recent group
+			// encrypt the message
+			// build Send { SendMsg { Msg { .. }, recipients = .. } }
+			// FIXME: when it is time to update, check if there are pending_remove nids
+			// if yes, get all nids for each nid and issue a SendRemove instead of SendUpdate
+			// return SendSmg and Option<SendCommit>
+			todo!()
+		}
 	}
 
 	// this shouldn't be public, by the way; instead, use from send_msg()
-	fn update(&self, sender: Nid) {
-		// 1 get the most recent epoch
-		// 2 if pending_remove(guid) is not empty
-		//		send SendRemove(pending_remove-s)
-		//	 else
-		//		send SendCommit
+	pub async fn update(&self, guid: Id) -> Result<transport::Send, Error> {
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			// 1 get the most recent epoch
+			// 2 if pending_remove(guid) is not empty
+			//		send SendRemove(pending_remove-s)
+			//	 else
+			//		send SendCommit
+
+			todo!()
+		}
 	}
 
 	pub async fn edit(&self, desc: &[u8], sender: Nid, guid: Id) -> Result<(), Error> {
-		// keep sending if fails
-		todo!()
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			// keep sending if fails
+
+			todo!()
+		}
 	}
 
-	pub async fn add(
+	async fn add(
 		&self,
 		invitees: &[(Nid, Option<KeyPackage>)],
 		sender: Nid,
 		guid: Id,
-	) -> Result<Option<transport::Send>, Error> {
-		// 1 fetch all nids for this contact unless it's my device
-		// 2 fetch prekeys for each nid
-		// 3 if has pending_removes propose to remove them as well
-		// TODO: respect access rules
-		// may return Send { SendRemove } in case pending_remove is not empty
+	) -> Result<transport::Send, Error> {
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			// 1 fetch all nids for this contact unless it's my device
+			// 2 fetch prekeys for each nid
+			// 3 if has pending_removes propose to remove them as well
+			// TODO: respect access rules
 
-		// if this commit fails, check whether some nids are already added by someone else
-		todo!()
-	}
+			// err if already added – NoChangeRequried { .. }
 
-	fn add_with_prefetched_prekeys(
-		&self,
-		invitees: &[(Nid, KeyPackage)],
-		sender: Nid,
-		guid: Id,
-	) -> Result<Option<transport::Send>, Error> {
-		// FIXME: ignore pending_removal if !pending_removes.contains(&id)
-		// 1 fetch all nids for this contact
-		// 2 fetch prekeys for each nid and verify them (use dilithium identities, when implemented)
-		// 3 store proposals - remove old ones first?
-		// 4 store commit
-		// if this commit fails, check whether some nids are already added by someone else
-		todo!()
+			// if this commit fails, check whether some nids are already added by someone else
+
+			// FIXME: ignore pending_removal if !pending_removes.contains(&id)
+			// 1 fetch all nids for this contact
+			// 2 fetch prekeys for each nid and verify them (use dilithium identities, when implemented)
+			// 3 store proposals - remove old ones first?
+			// 4 store commit
+			// if this commit fails, check whether some nids are already added by someone else
+			todo!()
+		}
 	}
 
 	pub async fn leave(&self, guid: Id, farewell: &[u8]) -> Result<transport::Send, Error> {
-		let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
-		let ct = latest_epoch.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
-		let req_id = ct.content_id;
-		let farewell = SendMsg {
-			payload: ct,
-			recipients: latest_epoch.roster().ids(),
-		};
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
+			let ct = latest_epoch.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
+			let req_id = ct.content_id;
+			let farewell = SendMsg {
+				payload: ct,
+				recipients: latest_epoch.roster().ids(),
+			};
 
-		self.save_group(&latest_epoch).await?;
-		self.storage
-			.mark_as_pending_leave(guid, true, req_id)
-			.await?;
+			self.save_group(&latest_epoch).await?;
+			self.storage
+				.mark_as_pending_leave(guid, true, req_id)
+				.await?;
 
-		Ok(transport::Send::Leave(SendLeave { farewell }))
+			Ok(transport::Send::Leave(SendLeave { farewell }))
+		}
 	}
 
 	// NOTE: this should be the only interface to remove nids from groups; if a nid is deactivated or something,
 	// NOTE: when unlocking, it is required to check for all deactivated accounts first and only then connect to the socket API for consistency! – otherwise
-	// one coiuld receive a remove for a pending_remove account (deactivated), which is not yet marked as pending_remove
+	// one could receive a remove for a pending_remove account (deactivated), which is not yet marked as pending_remove
 	// an external event should trigger this call
-	// it is possible nids are already remove, hence Option
+	// it is possible nids are already remove, hence Error::NoChangeRequired
 	// if one is deactivated, mark him as pending_delete
 	// if one manually removes one of his devices, he should manually send a SendRemove message
 	pub async fn remove(
@@ -679,41 +1004,45 @@ where
 		nids: &[Nid],
 		sender: Nid,
 		guid: Id,
-	) -> Result<Option<transport::Send>, Error> {
-		// I can delete one of my devices
-		// others can't delete just one device – they should use nids_for_nid
+	) -> Result<transport::Send, Error> {
+		if self.storage.is_pending_admit(guid).await? {
+			Err(Error::PendingAdmit { guid })
+		} else {
+			// I can delete one of my devices
+			// others can't delete just one device – they should use nids_for_nid
 
-		// also remove pending_remove, if any?
-		// TODO: respect access rules
-		// if the [nids] is empty, do nothing
+			// also remove pending_remove, if any?
+			// TODO: respect access rules
+			// if the [nids] is empty, do nothing
 
-		// when one disables one of his devices, he should manually remove it by sending SendRemove; hence, do not use nids_for_nids!
-		// should I use nids_for_nids here at all? if I miss a device, my commit will be rejected
-		// 1 reframe the proposals to resign/recrypt and filter unnecessary ones
-		// let reframed = group.reframe_proposals(&props);
-		// 2 get missing nids in case of missing devies
-		// ^ should all this be done in handle_remove instead?
-		// 3 return
+			// when one disables one of his devices, he should manually remove it by sending SendRemove; hence, do not use nids_for_nids!
+			// should I use nids_for_nids here at all? if I miss a device, my commit will be rejected
+			// 1 reframe the proposals to resign/recrypt and filter unnecessary ones
+			// let reframed = group.reframe_proposals(&props);
+			// 2 get missing nids in case of missing devies
+			// ^ should all this be done in handle_remove instead?
+			// 3 return
 
-		// also, get all nids for this nid again and propose for them as well
+			// also, get all nids for this nid again and propose for them as well
 
-		// let group = self.storage.get_latest_epoch(guid).await?;
+			// let group = self.storage.get_latest_epoch(guid).await?;
 
-		// 1 get all nids for this user
-		// 2 make FramedProposals and store them
-		// 3 make FrameCommit and store it
-		// it is possible some peers are already removed; check and filter
+			// 1 get all nids for this user
+			// 2 make FramedProposals and store them
+			// 3 make FrameCommit and store it
+			// it is possible some peers are already removed; check and filter
 
-		// let nids = self.storage.get_nids_for_nid(&id).await?;
-		// nids.into_iter().for_each(|nid| {
-		// 	if props.get(&nid.as_bytes()).is_none() {
-		// 		if let Ok((fp, ct)) = group.propose_remove(&nid) {
-		// 			props.insert(nid.as_bytes(), nid);
-		// 		}
-		// 	}
-		// });
+			// let nids = self.storage.get_nids_for_nid(&id).await?;
+			// nids.into_iter().for_each(|nid| {
+			// 	if props.get(&nid.as_bytes()).is_none() {
+			// 		if let Ok((fp, ct)) = group.propose_remove(&nid) {
+			// 			props.insert(nid.as_bytes(), nid);
+			// 		}
+			// 	}
+			// });
 
-		todo!()
+			todo!()
+		}
 	}
 
 	// handling Rcvd might required resending. Hence Option<transport::Send>
@@ -726,6 +1055,7 @@ where
 		use transport::Received::*;
 
 		// FIXME: mark Received as processed at some point
+		// ignore already processed messages
 		// TODO: if sender is pending_remove, ignore or throw?
 		// TODO: if pending_leave(guid) ignore except for ReceivedLeave & Remove or should I really care?
 
@@ -740,7 +1070,16 @@ where
 
 				Ok(None)
 			}
-			Remove(r) => Ok(self.handle_remove(sender, r, receiver).await?),
+			Admit(a) => {
+				self.handle_admit(a, sender, receiver).await?;
+
+				Ok(None)
+			}
+			Remove(r) => {
+				self.handle_remove(sender, r, receiver).await?;
+
+				Ok(None)
+			}
 			Edit(e) => {
 				self.handle_edit(e, sender, receiver).await?;
 
@@ -767,6 +1106,8 @@ where
 				Ok(None)
 			}
 		}
+
+		// mark as processed
 	}
 
 	// invitees should NOT contain the group owner, or the process will fail upon proposing
@@ -776,7 +1117,7 @@ where
 		invitees: &[Nid],
 	) -> Result<(Id, transport::SendInvite), Error> {
 		if invitees.is_empty() {
-			Err(Error::GroupCantBeEmpty)
+			Err(Error::NoEmptyGroupsAllowed)
 		} else {
 			// fetch prekeys for each invitee
 			let kps = self.api.fetch_key_packages(invitees).await;
@@ -813,18 +1154,22 @@ where
 					group
 						.propose_add(*nid, kp)
 						.map(|(fp, _)| fp)
-						.map_err(|e| e.into())
+						.map_err(|e| Error::CantCreate {
+							ctx: format!("{:#?}", e),
+						})
 				})
 				.collect::<Result<Vec<FramedProposal>, Error>>()?;
 
 			// commit the proposal
-			let (fc, _, ctds, wlcms) = group.commit(&fps)?;
+			let (fc, _, ctds, wlcms) = group.commit(&fps).map_err(|e| Error::CantCreate {
+				ctx: format!("{:#?}", e),
+			})?;
 			// this processed group will now have everyone in it
 			let group = group
-				.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)?
+				.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)
+				.unwrap()
 				.unwrap();
 
-			// TODO: add an optional SendInvite in case everything fails?
 			self.save_group(&group).await?;
 
 			let (wcti, wctds) = wlcms.unwrap();
@@ -841,6 +1186,7 @@ where
 	}
 
 	pub async fn encrypt_msg(&self, pt: &[u8], guid: Id) -> Result<Encrypted, Error> {
+		// TODO: check if pending admit?
 		let mut group = self.storage.get_latest_epoch(guid).await?;
 		let msg = Msg(pt.to_vec());
 		let ct = group.encrypt(&msg, ContentType::Msg);
@@ -863,7 +1209,7 @@ where
 
 	// db may be locked, hence Result
 	async fn delete_group(&self, guid: &Id) -> Result<(), Error> {
-		self.storage.delete_group(guid).await;
+		self.storage.delete_group(*guid).await?;
 		// delete pending_remove
 		// delete framed proposals
 		// delete framed commits
@@ -888,32 +1234,6 @@ where
 			.await
 	}
 }
-
-// enum Message {
-// 	App(Vec<u8>),
-// 	Propose(FramedProposal),
-// 	Commit(FramedCommit, ilum::Ctd),
-// 	Welcome(WlcmCti, WlcmCtd),
-// }
-
-// fn decrypt(msg: Encrypted) -> Message {
-// 1 get state for (guid, epoch)
-// 2 get a chain tree for the given message type
-// 3 get a detached key for the given tree & gen
-// 4 derive mac_key and enc_key from the given detached key
-// 5 verify mac of the payload
-// 6 if msg.type == commit
-//	6.1 if sender == me
-//		6.1.1 if not_outdated apply_by_id
-//		6.1.2 else resend_if_required_or_ignore
-// 	6.2 else
-//		6.2.1 if not_outdated decrypt_and_apply(cm, enc_key)
-//		6.2.1 ignore
-// 7 else if msg.type == proposal decrypt_and_store_if_not_outdated(p, enc_key)
-// 8 else decrypt_and_store
-
-// todo!()
-// }
 
 #[cfg(test)]
 mod tests {
