@@ -1325,7 +1325,7 @@ impl Deserializable for transport::SendRemove {
 impl From<&transport::SendEdit> for SendEdit {
 	fn from(val: &transport::SendEdit) -> Self {
 		Self {
-			prop: (&val.prop).into(),
+			props: val.props.iter().map(|p| p.into()).collect(),
 			commit: (&val.commit).into(),
 		}
 	}
@@ -1342,7 +1342,14 @@ impl TryFrom<SendEdit> for transport::SendEdit {
 
 	fn try_from(val: SendEdit) -> Result<Self, Self::Error> {
 		Ok(Self {
-			prop: val.prop.try_into().or(Err(Error::BadCiphertextFormat))?,
+			props: val
+				.props
+				.iter()
+				.map(|p| {
+					Ok(ciphertext::Ciphertext::try_from(p.clone())
+						.or(Err(Error::BadCiphertextFormat))?)
+				})
+				.collect::<Result<Vec<ciphertext::Ciphertext>, Error>>()?,
 			commit: transport::SendCommit::try_from(val.commit)
 				.or(Err(Error::BadSendCommitFormat))?,
 		})
@@ -1788,9 +1795,8 @@ impl Deserializable for transport::ReceivedRemove {
 impl From<&transport::ReceivedEdit> for ReceivedEdit {
 	fn from(val: &transport::ReceivedEdit) -> Self {
 		Self {
-			prop: (&val.prop).into(),
-			cti: (&val.cti).into(),
-			ctd: (&val.ctd).into(),
+			props: (&val.props).into(),
+			commit: (&val.commit).into(),
 		}
 	}
 }
@@ -1806,12 +1812,14 @@ impl TryFrom<ReceivedEdit> for transport::ReceivedEdit {
 
 	fn try_from(val: ReceivedEdit) -> Result<Self, Self::Error> {
 		Ok(Self {
-			prop: val
-				.prop
+			props: val
+				.props
 				.try_into()
 				.or(Err(Error::BadReceivedProposalFormat))?,
-			cti: val.cti.try_into().or(Err(Error::BadCiphertextFormat))?,
-			ctd: val.ctd.try_into().or(Err(Error::BadCtdFormat))?,
+			commit: val
+				.commit
+				.try_into()
+				.or(Err(Error::BadReceivedCommitFormat))?,
 		})
 	}
 }
@@ -2503,7 +2511,7 @@ mod tests {
 			],
 		};
 		let se = transport::SendEdit {
-			prop: ct,
+			props: vec![ct],
 			commit: sc,
 		};
 		let serialized = se.serialize();
@@ -2980,10 +2988,10 @@ mod tests {
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
+		let rc = transport::ReceivedCommit { cti, ctd };
 		let rr = transport::ReceivedEdit {
-			prop,
-			cti: cti.clone(),
-			ctd,
+			props: transport::ReceivedProposal { props: vec![prop] },
+			commit: rc,
 		};
 		let serialized = rr.serialize();
 		let deserialized = transport::ReceivedEdit::deserialize(&serialized);

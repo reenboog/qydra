@@ -66,6 +66,14 @@ pub enum Error {
 		invited_to_epoch: u64,
 	},
 	NoGroupFound(Id),
+	// some props or commits (or else) not found
+	BrokenState {
+		guid: Id,
+		epoch: u64,
+		ctx: String,
+	},
+	UnknownProp(Id),
+	UnknownCommit(Id),
 	NoEmptyGroupsAllowed,
 	CantCreate {
 		ctx: String,
@@ -101,7 +109,9 @@ pub enum Error {
 		guid: Id,
 		greeting: Vec<u8>,
 	},
+	// resend whatever is supplied
 	NeedsResend(transport::Send),
+
 	// nids might already be added/removed
 	NoChangeRequired {
 		guid: Id,
@@ -151,6 +161,11 @@ pub struct OnRemove {
 	pub detached: Vec<Nid>,
 }
 
+pub struct OnEdit {
+	pub left: Vec<Nid>,
+	pub desc: Vec<u8>,
+}
+
 pub struct OnHandle {
 	sender: Nid,
 	guid: Id,
@@ -185,10 +200,12 @@ pub trait Storage {
 		epoch: u64,
 		guid: Id,
 	) -> Result<(), Error>;
+	// Ok(Prop) | Err(UnknownProp)
 	async fn get_prop(&self, id: Id, epoch: u64, guid: Id) -> Result<FramedProposal, Error>;
 	async fn delete_props(&self, guid: Id, epoch: u64) -> Result<(), Error>;
 
 	async fn save_commit(&self, commit: &FramedCommit, id: Id, guid: Id) -> Result<(), Error>;
+	// Ok(Commit) | Err(UnknownCommit)
 	async fn get_commit(&self, id: Id, epoch: u64, guid: Id) -> Result<FramedCommit, Error>;
 	async fn delete_commits(&self, guid: Id, epoch: u64) -> Result<FramedCommit, Error>;
 
@@ -359,21 +376,26 @@ where
 		match epoch.cmp(&latest_epoch.epoch()) {
 			Less => {
 				if sender == receiver {
-					let invitees = future::try_join_all(
-						add.props
-							.props
+					Err(Error::NeedsResend(
+						self.add(
+							&future::try_join_all(
+								add.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+							)
+							.await?
 							.into_iter()
-							.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
-					)
-					.await?
-					.into_iter()
-					.filter_map(|fp| match fp.prop {
-						Proposal::Add { id, kp } => Some((id, Some(kp))),
-						_ => None,
-					})
-					.collect::<Vec<(Nid, Option<KeyPackage>)>>();
-
-					Err(Error::NeedsResend(self.add(&invitees, sender, guid).await?))
+							.filter_map(|fp| match fp.prop {
+								Proposal::Add { id, kp } => Some((id, Some(kp))),
+								_ => None,
+							})
+							.collect::<Vec<(Nid, Option<KeyPackage>)>>(),
+							sender,
+							guid,
+						)
+						.await?,
+					))
 				} else {
 					Err(Error::OutdatedCommit {
 						guid,
@@ -575,24 +597,26 @@ where
 					// and others won't be able to decrypt it since the sender is signed and hashed along with the entire payload
 
 					// if one of the proposals is not found, the backend is trying to mess up with me – ignore
-					let nids = future::try_join_all(
-						remove
-							.props
-							.props
-							.into_iter()
-							.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
-					)
-					.await?
-					.into_iter()
-					.filter_map(|fp| match fp.prop {
-						Proposal::Remove { id } => Some(id),
-						_ => None,
-					})
-					.collect::<Vec<Nid>>();
-
-					// while sender is the same as receiver here, I'm emphasizing it is *I* who's removing now
 					Err(Error::NeedsResend(
-						self.remove(&nids, receiver, guid).await?,
+						self.remove(
+							&future::try_join_all(
+								remove
+									.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+							)
+							.await?
+							.into_iter()
+							.filter_map(|fp| match fp.prop {
+								Proposal::Remove { id } => Some(id),
+								_ => None,
+							})
+							.collect::<Vec<Nid>>(),
+							receiver,
+							guid,
+						)
+						.await?,
 					))
 				} else {
 					// it's someone else's outdated remove – they'll resend it later, if need be
@@ -626,8 +650,8 @@ where
 								let is_pending_remove = pending_removes.contains(&id);
 								let is_same_sender_id = sender.is_same_id(&id);
 								let can_remove = true; // FIXME: implement can_nid_remove_nid(sender, nid, group)
-								// TODO: should I check if sender is trying to remove only one device of someone else
-								// to enforce the "only I can remove my stuff" policy?
+					   // TODO: should I check if sender is trying to remove only one device of someone else
+					   // to enforce the "only I can remove my stuff" policy?
 
 								if is_pending_remove {
 									left.push(id);
@@ -755,19 +779,187 @@ where
 		}
 	}
 
-	// enum OnEdit { Ok(guid), Resend(Send) }
+	// Ok(OnEdit) | Resend(Send)
 	async fn handle_edit(
 		&self,
 		edit: transport::ReceivedEdit,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
-		todo!()
-		// if mine & outdated, reframe and resend, if required
+	) -> Result<OnEdit, Error> {
 		// it is worth nothing, cases similar to "delayed remove/add" are possible when changing access rules:
-		// eg, a delayed revoke for a already revoked/re-granted token should not make sense and the other way around (grant )
-		// to address this properly, granted_at and revoked_at should be stored for each admin/owner
-		// mark as non pending?
+		// eg, a delayed revoke for an already revoked/re-granted token should be ok as long as access level still allows that
+		use std::cmp::Ordering::*;
+
+		let epoch = edit.commit.cti.epoch;
+		let guid = edit.commit.cti.guid;
+		let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
+
+		match epoch.cmp(&latest_epoch.epoch()) {
+			Less => {
+				if sender == receiver {
+					// it's my edit, so try resending it
+					Err(Error::NeedsResend(
+						self.edit(
+							&future::try_join_all(
+								edit.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+							)
+							.await?
+							.into_iter()
+							.find_map(|fp| match fp.prop {
+								Proposal::Edit { description } => Some(description),
+								_ => None,
+							})
+							.ok_or(Error::BrokenState {
+								guid,
+								epoch,
+								ctx: "handle_edit: no edit prop found".to_string(),
+							})?,
+							receiver,
+							guid,
+						)
+						.await?,
+					))
+				} else {
+					Err(Error::OutdatedCommit {
+						guid,
+						sender,
+						epoch,
+						ctx: "EDIT".to_string(),
+					})
+				}
+			}
+			Equal => {
+				struct Diff {
+					props: Vec<FramedProposal>,
+					left: Vec<Nid>,
+					desc: Vec<u8>,
+				}
+
+				let pending_removes = self.storage.get_pending_removes(guid).await?;
+				let filter_map_props = |fps: Vec<FramedProposal>| -> Diff {
+					let mut left = Vec::new();
+					let mut desc = Vec::new();
+					let props = fps
+						.into_iter()
+						.filter_map(|fp| match fp.prop {
+						// pending removes are ok when editing
+						Proposal::Remove { id }
+						if pending_removes.contains(&id) => {
+							left.push(id);
+
+							Some(fp)
+						},
+						// apply only one edit, in case someone is abusing the protocol
+						Proposal::Edit { ref description } if desc.is_empty() && true /* FIXME: implement can_edit */ => {
+							desc = description.clone();
+
+							Some(fp)
+						}
+						_ => None,
+					})
+						.collect();
+
+					Diff { props, left, desc }
+				};
+
+				let (fps, fc) = if sender != receiver {
+					// it's someone else's REMOVE, so I need to decrypt both, the props and the commit, then process
+					let fps = edit
+						.props
+						.props
+						.into_iter()
+						.map(|p| {
+							latest_epoch
+								.decrypt(p.clone(), ContentType::Propose, &sender)
+								.or(Err(Error::FailedToDecrypt {
+									id: p.content_id,
+									content_type: ContentType::Propose,
+									sender,
+									guid,
+									epoch,
+									ctx: "handle_edit: prop".to_string(),
+								}))
+						})
+						.collect::<Result<Vec<FramedProposal>, Error>>()?;
+					let fc = latest_epoch
+						.decrypt::<FramedCommit>(
+							edit.commit.cti.clone(),
+							ContentType::Commit,
+							&sender,
+						)
+						.or(Err(Error::FailedToDecrypt {
+							id: edit.commit.cti.content_id,
+							content_type: ContentType::Commit,
+							sender,
+							guid,
+							epoch,
+							ctx: "handle_edit: commit".to_string(),
+						}))?;
+
+					// decryption changes the inner chains, so always save to preserve FS
+					self.save_group(&latest_epoch).await?;
+
+					Ok((fps, fc))
+				} else {
+					let fps = future::try_join_all(
+						edit.props
+							.props
+							.into_iter()
+							.map(|ct| self.storage.get_prop(ct.content_id, epoch, guid)),
+					)
+					.await?;
+					let fc = self
+						.storage
+						.get_commit(edit.commit.cti.content_id, epoch, guid)
+						.await?;
+
+					Ok((fps, fc))
+				}?;
+
+				// apply access rules
+				let diff = filter_map_props(fps);
+
+				if let Ok(Some(new_group)) =
+					latest_epoch.process(&fc, Some(&edit.commit.ctd), &diff.props)
+				{
+					self.save_group(&new_group).await?;
+				} else {
+					// something weird has just happened; not much to do, but log
+					return Err(Error::FailedToProcessCommit {
+						ctx: format!(
+							"EDIT on guid: {:#?}, epoch: {}, sender: {:#?}",
+							guid, epoch, sender
+						),
+					});
+				}
+
+				// mark the removed nids as not pending remove, had they ever been marked
+				future::try_join_all(
+					diff.left
+						.iter()
+						.map(|nid| self.storage.mark_as_pending_remove(guid, false, *nid)),
+				)
+				.await?;
+
+				Ok(OnEdit {
+					left: diff.left,
+					desc: diff.desc,
+				})
+			}
+			Greater =>
+			// the only explanation is the server lost part of its state and I missed a few commits before this one
+			// nothing can be done here except to reinitialize
+			{
+				Err(Error::TooNewEpoch {
+					epoch,
+					current: latest_epoch.epoch(),
+					guid,
+				})
+			}
+		}
 	}
 
 	// ()
@@ -933,7 +1125,7 @@ where
 		}
 	}
 
-	pub async fn edit(&self, desc: &[u8], sender: Nid, guid: Id) -> Result<(), Error> {
+	pub async fn edit(&self, desc: &[u8], sender: Nid, guid: Id) -> Result<transport::Send, Error> {
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {

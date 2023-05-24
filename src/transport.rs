@@ -30,7 +30,7 @@ pub struct SendRemove {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct SendEdit {
-	pub prop: Ciphertext,
+	pub props: Vec<Ciphertext>,
 	pub commit: SendCommit,
 }
 
@@ -101,9 +101,8 @@ pub struct ReceivedRemove {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct ReceivedEdit {
-	pub prop: Ciphertext,
-	pub cti: Ciphertext,
-	pub ctd: CmpdCtd,
+	pub props: ReceivedProposal,
+	pub commit: ReceivedCommit,
 }
 
 #[derive(PartialEq, Debug, Clone)]

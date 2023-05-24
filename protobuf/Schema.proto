@@ -241,7 +241,8 @@ message SendAdd {
 }
 
 message SendEdit {
-	required Ciphertext prop = 1;
+	// props may contain pending removes
+	repeated Ciphertext props = 1;
 	required SendCommit commit = 2;
 }
 
@@ -324,11 +325,9 @@ message ReceivedRemove {
 }
 
 message ReceivedEdit {
-	// the proposal itself
-	required Ciphertext prop = 1;
-	// commit cti & ctd
-	required Ciphertext cti = 2;
-	required CmpdCtd ctd = 3;
+	// the proposal itself + optional pending removes from a previous epoch
+	required ReceivedProposal props = 1;
+	required ReceivedCommit commit = 2;
 }
 
 message Received {
