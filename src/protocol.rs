@@ -150,6 +150,7 @@ pub enum Processed {
 	Remove(OnRemove),
 	// if farewell is Some, someone left; otherwise – me
 	Leave { farewell: Option<Msg> },
+	Edit(OnEdit),
 	Update,
 	// updating commits may remove pending removes, if any
 	Commit { left: Vec<Nid> },
@@ -1021,27 +1022,115 @@ where
 		}
 	}
 
-	// ()
+	// may return pending removes from the last epoch, if there were any
 	// currently, only updates are processed here; adds & removes are handled separately
 	async fn handle_commit(
 		&self,
 		commit: transport::ReceivedCommit,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
-		// if someone is trying to remove someone who's already removed, ignore
-		// if I'm trying to remove (processing my own commit) someone who's already removed, ignore
-		// if I'm adding someone who's added, ignore
+	) -> Result<Vec<Nid>, Error> {
+		use std::cmp::Ordering::*;
 
-		// get most recent epoch first
+		let guid = commit.cti.guid;
+		let epoch = commit.cti.epoch;
+		let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
 
-		// get all fps for this epoch
-		// if sender == receiver
-		//	my own commit, so	check commit.cti.content_id to get a local copy of FramedCommit
-		//	process(fc, commit.ctd)
-		// mark as non pending?
+		match epoch.cmp(&latest_epoch.epoch()) {
+			// ignore regardles of the sender
+			Less => Err(Error::OutdatedCommit {
+				guid,
+				sender,
+				epoch,
+				ctx: "hand_commit".to_string(),
+			}),
+			Equal => {
+				struct Diff {
+					props: Vec<FramedProposal>,
+					left: Vec<Nid>,
+				}
 
-		todo!()
+				let pending_removes = self.storage.get_pending_removes(guid).await?;
+				let filter_map_props = |fps: Vec<FramedProposal>| -> Diff {
+					let mut left = Vec::new();
+					let props = fps
+						.into_iter()
+						.filter_map(|fp| match fp.prop {
+							Proposal::Remove { id } if pending_removes.contains(&id) => {
+								left.push(id);
+
+								Some(fp)
+							}
+							Proposal::Update { .. } => Some(fp),
+							_ => None,
+						})
+						.collect();
+
+					Diff { props, left }
+				};
+
+				let fc = if sender != receiver {
+					// decrypt the commit and load fps
+					let fc = latest_epoch
+						.decrypt::<FramedCommit>(commit.cti.clone(), ContentType::Commit, &sender)
+						.or(Err(Error::FailedToDecrypt {
+							id: commit.cti.content_id,
+							content_type: ContentType::Commit,
+							sender,
+							guid,
+							epoch,
+							ctx: "handle_commit: commit".to_string(),
+						}))?;
+
+					self.save_group(&latest_epoch).await?;
+
+					Ok(fc)
+				} else {
+					self.storage
+						.get_commit(commit.cti.content_id, epoch, guid)
+						.await
+				}?;
+
+				let diff = filter_map_props(
+					future::try_join_all(
+						fc.commit
+							.prop_ids
+							.iter()
+							.map(|id| self.storage.get_prop(*id, epoch, guid)),
+					)
+					.await?,
+				);
+
+				if let Ok(Some(new_group)) =
+					latest_epoch.process(&fc, Some(&commit.ctd), &diff.props)
+				{
+					self.save_group(&new_group).await?;
+				} else {
+					// something weird has just happened; not much to do, but log
+					return Err(Error::FailedToProcessCommit {
+						ctx: format!(
+							"COMMIT on guid: {:#?}, epoch: {}, sender: {:#?}",
+							guid, epoch, sender
+						),
+					});
+				}
+
+				// mark the removed nids as not pending remove, had they ever been marked
+				future::try_join_all(
+					diff.left
+						.iter()
+						.map(|nid| self.storage.mark_as_pending_remove(guid, false, *nid)),
+				)
+				.await?;
+
+				Ok(diff.left)
+			}
+			Greater => Err(Error::TooNewEpoch {
+				epoch,
+				current: latest_epoch.epoch(),
+				guid,
+			}),
+		}
 	}
 
 	// just a regular message
@@ -1159,7 +1248,8 @@ where
 	}
 
 	// this shouldn't be public, by the way; instead, use from send_msg()
-	pub async fn update(&self, guid: Id) -> Result<transport::Send, Error> {
+	// inject latest_epoch, encrypt and return a new one?
+	async fn update(&self, guid: Id) -> Result<transport::Send, Error> {
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
