@@ -111,13 +111,22 @@ pub enum Error {
 	},
 	// resend whatever is supplied
 	NeedsResend(transport::Send),
-
+	// no props were supplied or they're outdated
+	EmptyProps {
+		sender: Nid,
+	},
 	// nids might already be added/removed
 	NoChangeRequired {
 		guid: Id,
 		ctx: String,
 	},
-	// someone else's outdated commit, should be ignored
+	OutdatedProp {
+		guid: Id,
+		sender: Nid,
+		epoch: u64,
+		ctx: String,
+	},
+	// an outdated commit, should be ignored
 	OutdatedCommit {
 		guid: Id,
 		sender: Nid,
@@ -141,6 +150,9 @@ pub enum Processed {
 	Remove(OnRemove),
 	// if farewell is Some, someone left; otherwise – me
 	Leave { farewell: Option<Msg> },
+	Update,
+	// updating commits may remove pending removes, if any
+	Commit { left: Vec<Nid> },
 }
 
 pub struct OnAdd {
@@ -193,13 +205,7 @@ pub trait Storage {
 	// gets all nids for the specified nid; useful in case a device is added/remove between the tasks
 	async fn get_nids_for_nid(&self, nid: Nid) -> Result<Vec<Nid>, Error>;
 
-	async fn save_prop(
-		&self,
-		prop: &FramedProposal,
-		id: Id,
-		epoch: u64,
-		guid: Id,
-	) -> Result<(), Error>;
+	async fn save_props(&self, prop: &[FramedProposal], epoch: u64, guid: Id) -> Result<(), Error>;
 	// Ok(Prop) | Err(UnknownProp)
 	async fn get_prop(&self, id: Id, epoch: u64, guid: Id) -> Result<FramedProposal, Error>;
 	async fn delete_props(&self, guid: Id, epoch: u64) -> Result<(), Error>;
@@ -962,15 +968,57 @@ where
 		}
 	}
 
-	// ()
 	async fn handle_props(
 		&self,
 		props: transport::ReceivedProposal,
 		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
-		todo!()
-		// mark as non pending?
+		use std::cmp::Ordering::*;
+
+		// in gegenral, props should contains only one update and optionally several remove props (if any pending removes are present)
+		// my props are already saved, so ignore them
+		if sender != receiver {
+			// ensure all props are coming from the same epoch
+			let mut latest_epoch = self
+				.storage
+				.get_latest_epoch(
+					props
+						.props
+						.first()
+						.ok_or(Error::EmptyProps { sender })?
+						.guid,
+				)
+				.await?;
+			let epoch = latest_epoch.epoch();
+			let guid = latest_epoch.uid();
+			let props = props
+				.props
+				.into_iter()
+				.filter_map(|fp| match fp.epoch.cmp(&epoch) {
+					// decryption would fail for mismatching guids anyway, but it saves resources in case someone is messing up
+					Equal if fp.guid == guid => latest_epoch
+						.decrypt::<FramedProposal>(fp, ContentType::Propose, &sender)
+						.ok(),
+					_ => None,
+				})
+				.filter(|prop| match prop.prop {
+					Proposal::Update { .. } => true,
+					// only pending removes are allowed, but we'll check that when processing the next commit
+					Proposal::Remove { .. } => true,
+					_ => false,
+				})
+				.collect::<Vec<FramedProposal>>();
+
+			if !props.is_empty() {
+				self.save_group(&latest_epoch).await?;
+				self.storage.save_props(&props, epoch, guid).await
+			} else {
+				Err(Error::EmptyProps { sender })
+			}
+		} else {
+			Ok(())
+		}
 	}
 
 	// ()

@@ -1380,12 +1380,15 @@ mod tests {
 		}
 
 		let (remove_alice_prop, _) = charlie_group.propose_remove(&alice_id).unwrap();
+		// removing the same nid twice is fine
+		let (remove_alice_by_bob_prop, _) = bob_group.propose_remove(&alice_id).unwrap();
 		let (edit_prop, _) = alice_group.propose_edit(b"v2").unwrap();
 		let (update_charlie_prop, _) = charlie_group.propose_update();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (fc, fc_ct, ctds, wlcms) = bob_group
 			.commit(&[
 				remove_alice_prop.clone(),
+				remove_alice_by_bob_prop.clone(),
 				update_charlie_prop.clone(),
 				update_alice_prop.clone(),
 				edit_prop.clone(),
@@ -1400,6 +1403,7 @@ mod tests {
 					update_alice_prop.clone(),
 					edit_prop.clone(),
 					update_charlie_prop.clone(),
+					remove_alice_by_bob_prop.clone(),
 				],
 			)
 			.unwrap();
@@ -1414,6 +1418,7 @@ mod tests {
 				&[
 					remove_alice_prop.clone(),
 					edit_prop.clone(),
+					remove_alice_by_bob_prop.clone(),
 					update_alice_prop.clone(),
 					update_charlie_prop.clone(),
 				],
@@ -1433,6 +1438,7 @@ mod tests {
 				&[
 					remove_alice_prop.clone(),
 					update_alice_prop,
+					remove_alice_by_bob_prop,
 					edit_prop,
 					update_charlie_prop.clone(),
 				],
