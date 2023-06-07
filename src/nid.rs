@@ -42,9 +42,38 @@ impl TryFrom<Vec<u8>> for Nid {
 	}
 }
 
+// returns nids with unique id, eg (0, 0), (0, 1), (1, 0), (2, 0), (2, 1) -> (0, 0), (1, 0), (2, 0)
+pub fn filter_unique_by_ids(nids: &[Nid]) -> Vec<Nid> {
+	nids.iter().fold(vec![], |mut acc, nid| {
+		if !acc.iter().any(|x| x.is_same_id(&nid)) {
+			acc.push(nid.clone());
+		}
+		acc
+	})
+}
+
 #[cfg(test)]
 mod tests {
-	use crate::nid::Nid;
+	use crate::nid::{filter_unique_by_ids, Nid};
+
+	#[test]
+	fn test_unify_by_ids() {
+		assert_eq!(
+			filter_unique_by_ids(&vec![
+				Nid::new(b"abcdefgh", 0),
+				Nid::new(b"abcdefgh", 1),
+				Nid::new(b"abcdefgh", 2),
+				Nid::new(b"zxcvbnm,", 0),
+				Nid::new(b"zxcvbnm,", 2),
+				Nid::new(b"qwertyu,", 3),
+			]),
+			vec![
+				Nid::new(b"abcdefgh", 0),
+				Nid::new(b"zxcvbnm,", 0),
+				Nid::new(b"qwertyu,", 3),
+			]
+		);
+	}
 
 	#[test]
 	fn test_as_bytes() {
