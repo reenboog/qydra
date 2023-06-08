@@ -1391,6 +1391,7 @@ where
 				.unzip();
 
 			// a2
+			// TODO: always do it for my (sender) nids instead
 			let (detaches_to_save, detaches_to_send): (Vec<_>, Vec<_>) =
 				if all_nids.iter().any(|n| n.is_same_id(&sender)) {
 					roster
@@ -1408,7 +1409,7 @@ where
 			// r: b1, c1, c2
 			let pending_removes = self.storage.get_pending_removes(guid).await?;
 			let (removes_to_save, removes_to_send) =
-				Self::propose_remove_pending_removes_if_any(&mut latest, &pending_removes)
+				Self::propose_remove_if_any(&mut latest, &pending_removes)
 					.into_iter()
 					.unzip();
 
@@ -1463,15 +1464,15 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			let mut latest_epoch = self.storage.get_latest_epoch(guid).await?;
-			let ct = latest_epoch.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
+			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let ct = latest.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
 			let req_id = ct.content_id;
 			let farewell = SendMsg {
 				payload: ct,
-				recipients: latest_epoch.roster().ids(),
+				recipients: latest.roster().ids(),
 			};
 
-			self.save_group(&latest_epoch).await?;
+			self.save_group(&latest).await?;
 			self.storage
 				.mark_as_pending_leave(guid, true, req_id)
 				.await?;
@@ -1483,9 +1484,9 @@ where
 	// NOTE: this should be the only interface to remove nids from groups; if a nid is deactivated or something,
 	// NOTE: when unlocking, it is required to check for all deactivated accounts first and only then connect to the socket API for consistency! – otherwise
 	// one could receive a remove for a pending_remove account (deactivated), which is not yet marked as pending_remove
-	// an external event should trigger this call
-	// it is possible nids are already remove, hence Error::NoChangeRequired
-	// if one is deactivated, mark him as pending_delete
+	// an external event should trigger this call; TODO: should I distinguish deactivation between remove/detach/leave?
+	// so, if one is deactivated, mark him as pending_remove and remove as usual dring one of the next commits
+	// it is possible nids are already removed, hence Error::NoChangeRequired
 	// if one manually removes one of his devices, he should manually send a SendRemove message
 	pub async fn remove(
 		&self,
@@ -1496,49 +1497,64 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			// it is possible for a leftie who's still pending remove to have propagated his new devices to us (through another group, for example)
-			// hence, when resending a remove commit, we'll have more nids of that user than ever was in the roster
-			// in general, we should not care, since Group::propose_remove will simply return Error::UserDoesNotExist
+			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let epoch = latest.epoch();
+			// r: a0, a1, a2, b1, c1, c2, d1, d2, d3, e1, f1, g1
+			// nids: a1, b1, g1
+			// pr: b1, d1
+			let pending_removes = self.storage.get_pending_removes(guid).await?;
+			// a1, b1, g1, b1, g1
+			// senders: a1
+			// others: b1, g1, b1, g1
+			let (mut senders, others): (Vec<_>, Vec<_>) = [nids, &pending_removes]
+				.concat()
+				.into_iter()
+				.filter(|nid|
+					// FIXME: respect access rules
+					sender.is_same_id(nid) || pending_removes.iter().any(|n| n.is_same_id(nid)) || true)
+				.partition(|nid| nid.is_same_id(&sender));
 
-			// REVIEW: no need to call nids_for_nid here – instead, rely on the roster itself – actually we should in case a device is added in a different group?
+			senders.sort();
+			senders.dedup();
 
-			// for pending removes respect nids_for_nid to remove all nids?
+			// delete only specified nids for the sender
+			let (detaches_to_save, detaches_to_send): (Vec<_>, Vec<_>) = senders
+				.into_iter()
+				.filter_map(|nid| latest.propose_remove(&nid).ok())
+				.collect::<Vec<_>>()
+				.into_iter()
+				.unzip();
+			// delete all nids for the specified nids from the roster
+			let (removes_to_save, removes_to_send) =
+				Self::propose_remove_if_any(&mut latest, &others)
+					.into_iter()
+					.unzip();
 
-			// I can delete one of my devices
-			// others can't delete just one device – they should use nids_for_nid
+			let to_save = [detaches_to_save, removes_to_save].concat();
+			let to_send = [detaches_to_send, removes_to_send].concat();
 
-			// also remove pending_remove, if any?
-			// TODO: respect access rules
-			// if the [nids] is empty, do nothing
+			if !to_save.is_empty() {
+				let (commit, cti, ctds, _) =
+					latest.commit(&to_save).or(Err(Error::FailedToCommit {
+						ctx: "remove".to_string(),
+					}))?;
 
-			// when one disables one of his devices, he should manually remove it by sending SendRemove; hence, do not use nids_for_nids!
-			// should I use nids_for_nids here at all? if I miss a device, my commit will be rejected
-			// 1 reframe the proposals to resign/recrypt and filter unnecessary ones
-			// let reframed = group.reframe_proposals(&props);
-			// 2 get missing nids in case of missing devies
-			// ^ should all this be done in handle_remove instead?
-			// 3 return
+				self.storage
+					.save_props(&to_save, epoch, guid, Some(commit.id()))
+					.await?;
+				self.storage.save_commit(&commit, commit.id(), guid).await?;
+				self.save_group(&latest).await?;
 
-			// also, get all nids for this nid again and propose for them as well
-
-			// let group = self.storage.get_latest_epoch(guid).await?;
-
-			// 1 get all nids for this user
-			// 2 make FramedProposals and store them
-			// 3 make FrameCommit and store it
-			// it is possible some peers are already removed; check and filter
-
-			// unless it's my device, do:
-			// let nids = self.storage.get_nids_for_nid(&id).await?;
-			// nids.into_iter().for_each(|nid| {
-			// 	if props.get(&nid.as_bytes()).is_none() {
-			// 		if let Ok((fp, ct)) = group.propose_remove(&nid) {
-			// 			props.insert(nid.as_bytes(), nid);
-			// 		}
-			// 	}
-			// });
-
-			todo!()
+				Ok(transport::Send::Remove(transport::SendRemove {
+					props: to_send,
+					commit: transport::SendCommit { cti, ctds }
+				}))
+			} else {
+				Err(Error::NoChangeRequired {
+					guid,
+					ctx: "remove".to_string(),
+				})
+			}
 		}
 	}
 
@@ -1690,17 +1706,13 @@ where
 	// roster: [a1, a2, a3, b1, b2, c1, d1, e1, e2]
 	// pending remove: [a2, e2]
 	// to delete: [a1, a2, a3, e1, e2]
-	fn propose_remove_pending_removes_if_any(
-		group: &mut Group,
-		pending_removes: &[Nid],
-	) -> Vec<(FramedProposal, Ciphertext)> {
+	fn propose_remove_if_any(group: &mut Group, nids: &[Nid]) -> Vec<(FramedProposal, Ciphertext)> {
 		group
 			.roster()
 			.ids()
 			.iter()
 			.filter_map(|nid| {
-				pending_removes
-					.iter()
+				nids.iter()
 					.find(|pr| pr.is_same_id(&nid))
 					.and_then(|_| group.propose_remove(&nid).ok())
 			})
@@ -1727,10 +1739,7 @@ where
 				let mut props = vec![latest.propose_update()];
 				let pending_removes = self.storage.get_pending_removes(guid).await?;
 
-				props.extend(Self::propose_remove_pending_removes_if_any(
-					&mut latest,
-					&pending_removes,
-				));
+				props.extend(Self::propose_remove_if_any(&mut latest, &pending_removes));
 
 				let (to_save, to_send): (Vec<_>, Vec<_>) = props.into_iter().unzip();
 
