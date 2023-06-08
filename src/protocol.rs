@@ -166,6 +166,8 @@ pub enum Processed {
 	Update,
 	// updating commits may remove pending removes, if any
 	Commit { left: Vec<Nid> },
+	// an arbitrary message
+	Msg(Vec<u8>),
 }
 
 pub struct OnAdd {
@@ -379,10 +381,10 @@ where
 		let guid = admit.guid;
 		let epoch = admit.epoch;
 		let id = admit.content_id;
-		let mut group = self.storage.get_group(&guid, epoch).await?;
 
 		// I won't be able to decrypt my own admission anyway
 		if sender != receiver && self.storage.is_pending_admit(guid).await? {
+			let mut group = self.storage.get_group(&guid, epoch).await?;
 			let Msg(greeting) = group
 				.decrypt::<Msg>(admit, ContentType::Msg, &sender)
 				.or(Err(Error::FailedToDecrypt {
@@ -1213,31 +1215,34 @@ where
 	}
 
 	// just a regular message
-	async fn handle_msg(&self, ct: Ciphertext, sender: Nid, receiver: Nid) -> Result<(), Error> {
-		// match self
-		// 	.storage
-		// 	.get_group(&ct.guid.as_bytes().to_vec(), ct.epoch)
-		// 	.await
-		// {
-		// 	Ok(mut group) => {
-		// 		let pt = group.decrypt::<Msg>(ct, ContentType::Msg)?;
+	async fn handle_msg(
+		&self,
+		ct: Ciphertext,
+		sender: Nid,
+		receiver: Nid,
+	) -> Result<Option<Vec<u8>>, Error> {
+		if sender != receiver {
+			let guid = ct.guid;
+			let epoch = ct.epoch;
+			let id = ct.content_id;
+			let mut group = self.storage.get_group(&guid, epoch).await?;
+			let pt = group.decrypt::<Msg>(ct, ContentType::Msg, &sender).or(Err(
+				Error::FailedToDecrypt {
+					id,
+					content_type: ContentType::Msg,
+					sender,
+					guid,
+					epoch,
+					ctx: "handle_msg".to_string(),
+				},
+			))?;
 
-		// 		self.save_group(&group).await;
+			self.save_group(&group).await?;
 
-		// 		// TODO: return pt.0
-		// 	}
-		// 	Err(err) =>
-		// 		// if not found, get the most recent on and compare epoch
-		// 		// if recent.epoch < ct.epoch -> state corrupted
-		// 		// else too old epoch
-		// 	}
-		// }
-
-		// TODO: how about admins?
-		// mark as non pending?
-
-		// Ok(pt.0)
-		Ok(())
+			Ok(Some(pt.0))
+		} else {
+			Ok(None)
+		}
 	}
 
 	async fn handle_leave(
@@ -1254,8 +1259,9 @@ where
 
 		let guid = ct.guid;
 		let epoch = ct.epoch;
-		let latest_epoch = self.storage.get_latest_epoch(guid).await?;
-		let user = latest_epoch
+		let latest = self.storage.get_latest_epoch(guid).await?;
+		// user could be already removed – just ignore, if that's a case
+		let user = latest
 			.roster()
 			.get(&sender)
 			.ok_or(Error::NoSuchUserInGroup { nid: sender, guid })?;
