@@ -414,6 +414,7 @@ where
 
 	// Error::NeedsAction for my outdated commit; if OnAdd::admit is Some, send it
 	// may contain Remove proposals, in case pending_removes are present or if it's my post admit correction (detach)
+	// I may be detached after processing this remove – check OnAdd::detached
 	// TODO: use Diff.OnAdd::attached & detached to update the node's device list (same for OnRemove)
 	async fn handle_add(
 		&self,
@@ -522,85 +523,66 @@ where
 					}
 				};
 
-				// (Option<transport::Send { Admit { .. } }>, fps)
-				let fps =
-					if sender != receiver {
-						// it's someone else's ADD, so I need to decrypt both, the props and the commit, then process
-						let fps = filter_map_props(
-							add.props
-								.props
-								.into_iter()
-								.map(|p| {
-									latest
-										.decrypt(p.clone(), ContentType::Propose, &sender)
-										// FIXME: filter_map instead
-										.or(Err(Error::FailedToDecrypt {
-											id: p.content_id,
-											content_type: ContentType::Propose,
-											sender,
-											guid,
-											epoch,
-											ctx: "handle_add: prop".to_string(),
-										}))
-								})
-								.collect::<Result<Vec<FramedProposal>, Error>>()?,
-						);
-						let fc = latest
-							.decrypt::<FramedCommit>(
-								add.commit.cti.clone(),
-								ContentType::Commit,
-								&sender,
-							)
-							.or(Err(Error::FailedToDecrypt {
-								id: add.commit.cti.content_id,
-								content_type: ContentType::Commit,
-								sender,
-								guid,
-								epoch,
-								ctx: "handle_add: commit".to_string(),
-							}))?;
-
-						// decryption changes the inner chains, so always save to keep FS
-						self.save_group(&latest).await?;
-
-						if let Ok(Some(new_group)) =
-							latest.process(&fc, Some(add.commit.ctd).as_ref(), &fps.props)
-						{
-							// we have a new epoch, so save this new group as well
-							self.save_group(&new_group).await?;
-
-							// I processed someone else's Add, so there's nothing else left to do
-							Ok((None, fps))
-						} else {
-							// those who left, won't receive this, explicit removes are not allowed here,
-							// so None when processing means error here
-							// FIXME: though detached devices might want to handle the None case
-							Err(Error::FailedToProcessCommit {
-								ctx: format!(
-									"ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
-									guid, epoch, sender
-								),
-							})
-						}
-					} else {
-						let fps =
-							filter_map_props(
-								future::try_join_all(add.props.props.into_iter().map(|ct| {
-									self.storage.get_prop_by_id(ct.content_id, epoch, guid)
+				let (fps, fc) = if sender != receiver {
+					// it's someone else's ADD, so I need to decrypt both, the props and the commit, then process
+					let fps = add
+						.props
+						.props
+						.into_iter()
+						.map(|p| {
+							latest
+								.decrypt(p.clone(), ContentType::Propose, &sender)
+								// FIXME: filter_map instead
+								.or(Err(Error::FailedToDecrypt {
+									id: p.content_id,
+									content_type: ContentType::Propose,
+									sender,
+									guid,
+									epoch,
+									ctx: "handle_add: prop".to_string(),
 								}))
-								.await?,
-							);
-						let fc = self
-							.storage
-							.get_commit(add.commit.cti.content_id, epoch, guid)
-							.await?;
+						})
+						.collect::<Result<Vec<FramedProposal>, Error>>()?;
+					let fc = latest
+						.decrypt::<FramedCommit>(
+							add.commit.cti.clone(),
+							ContentType::Commit,
+							&sender,
+						)
+						.or(Err(Error::FailedToDecrypt {
+							id: add.commit.cti.content_id,
+							content_type: ContentType::Commit,
+							sender,
+							guid,
+							epoch,
+							ctx: "handle_add: commit".to_string(),
+						}))?;
 
-						// no need to save the old group here, since it hasn't changed (nothing was decrypted & processing is immutable)
-						if let Ok(Some(mut new_group)) =
-							latest.process(&fc, Some(add.commit.ctd).as_ref(), &fps.props)
-						{
-							// admit the newcomers; can be sent to the invitees only, but it's ok as is
-							let admit = transport::Send::Admit(transport::SendAdmit {
+					// decryption changes the inner chains, so always save to keep FS
+					self.save_group(&latest).await?;
+
+					Ok((fps, fc))
+				} else {
+					let fps = future::try_join_all(
+						add.props
+							.props
+							.into_iter()
+							.map(|ct| self.storage.get_prop_by_id(ct.content_id, epoch, guid)),
+					)
+					.await?;
+					let fc = self
+						.storage
+						.get_commit(add.commit.cti.content_id, epoch, guid)
+						.await?;
+
+					Ok((fps, fc))
+				}?;
+
+				let diff = filter_map_props(fps);
+				let admit = match latest.process(&fc, Some(add.commit.ctd).as_ref(), &diff.props) {
+					Ok(Some(mut new_group)) => {
+						let admit = if sender == receiver {
+							Some(transport::Send::Admit(transport::SendAdmit {
 								greeting: transport::SendMsg {
 									// guid is used as a greeting for the cross check purpose
 									payload: new_group
@@ -608,25 +590,35 @@ where
 									// joined & attached could be used instead, but it's fine
 									recipients: new_group.roster().ids(),
 								},
-							});
-
-							self.save_group(&new_group).await?;
-
-							Ok((Some(admit), fps))
+							}))
 						} else {
-							Err(Error::FailedToProcessCommit {
-								ctx: format!(
-									"own ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
-									guid, epoch, sender
-								),
-							})
-						}
-					}?;
+							None
+						};
+
+						self.save_group(&new_group).await?;
+
+						admit
+					}
+					Ok(None) => {
+						// I have been detached; not quite supposed to happen, but possible
+						self.delete_group(&guid).await?;
+
+						None
+					}
+					Err(_) => {
+						// something weird has just happened; not much to do, but log
+						return Err(Error::FailedToProcessCommit {
+							ctx: format!(
+								"add on guid: {:#?}, epoch: {}, sender: {:#?}",
+								guid, epoch, sender
+							),
+						});
+					}
+				};
 
 				// mark the removed nids as not pending remove, had they ever been marked
 				future::try_join_all(
-					fps.1
-						.left
+					diff.left
 						.iter()
 						// fps will more likely have more nids than marked as pending remove (all devices for each nid), but it's ok
 						.map(|nid| self.storage.mark_as_pending_remove(guid, false, *nid)),
@@ -638,11 +630,11 @@ where
 				// FIXME: ^same for each fps.1.joined (get unique and sort-map)?
 
 				Ok(OnAdd {
-					joined: fps.1.joined,
-					attached: fps.1.attached,
-					detached: fps.1.detached,
-					left: fps.1.left,
-					admit: fps.0,
+					joined: diff.joined,
+					attached: diff.attached,
+					detached: diff.detached,
+					left: diff.left,
+					admit,
 				})
 			}
 			Greater => {
@@ -830,7 +822,7 @@ where
 						// something weird has just happened; not much to do, but log
 						return Err(Error::FailedToProcessCommit {
 							ctx: format!(
-								"own ADD on guid: {:#?}, epoch: {}, sender: {:#?}",
+								"remove on guid: {:#?}, epoch: {}, sender: {:#?}",
 								guid, epoch, sender
 							),
 						});
@@ -1547,7 +1539,7 @@ where
 
 				Ok(transport::Send::Remove(transport::SendRemove {
 					props: to_send,
-					commit: transport::SendCommit { cti, ctds }
+					commit: transport::SendCommit { cti, ctds },
 				}))
 			} else {
 				Err(Error::NoChangeRequired {
