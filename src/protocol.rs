@@ -136,7 +136,6 @@ pub enum Error {
 		guid: Id,
 		sender: Nid,
 		epoch: u64,
-		ctx: String,
 	},
 	// an outdated commit, should be ignored
 	OutdatedCommit {
@@ -1058,42 +1057,41 @@ where
 		// in gegenral, props should contain only one update and optionally several remove props (if any pending removes are present)
 		// my props are already saved, so ignore them
 		if sender != receiver {
-			// ensure all props are coming from the same epoch
-			let mut latest = self
-				.storage
-				.get_latest_epoch(
-					props
-						.props
-						.first()
-						.ok_or(Error::EmptyProps { sender })?
-						.guid,
-				)
-				.await?;
-			let epoch = latest.epoch();
-			let guid = latest.uid();
-			let props = props
-				.props
-				.into_iter()
-				.filter_map(|fp| match fp.epoch.cmp(&epoch) {
-					// decryption would fail for mismatching guids anyway, but it saves resources in case someone is messing up
-					Equal if fp.guid == guid => latest
-						.decrypt::<FramedProposal>(fp, ContentType::Propose, &sender)
-						.ok(),
-					_ => None,
-				})
-				.filter(|prop| match prop.prop {
-					Proposal::Update { .. } => true,
-					// only pending removes are allowed, but we'll check that when processing the next commit
-					Proposal::Remove { .. } => true,
-					_ => false,
-				})
-				.collect::<Vec<FramedProposal>>();
+			if let Some(guid) = props.props.first().map(|p| p.guid) {
+				let mut latest = self.storage.get_latest_epoch(guid).await?;
+				let epoch = latest.epoch();
+				// ensure all props are coming from the same epoch
+				let props = props
+					.props
+					.into_iter()
+					.filter_map(|fp| match fp.epoch.cmp(&epoch) {
+						// decryption would fail for mismatching guids anyway, but it saves resources in case someone is messing up
+						Equal if fp.guid == guid => latest
+							.decrypt::<FramedProposal>(fp, ContentType::Propose, &sender)
+							.ok(),
+						_ => None,
+					})
+					.filter(|prop| match prop.prop {
+						Proposal::Update { .. } => true,
+						// only pending removes are allowed, but we'll check that when processing the next commit
+						Proposal::Remove { .. } => true,
+						_ => false,
+					})
+					.collect::<Vec<FramedProposal>>();
 
-			if !props.is_empty() {
-				// decryption changes state, so save the group
-				self.save_group(&latest).await?;
-				// and store the received props
-				self.storage.save_props(&props, epoch, guid, None).await
+				if !props.is_empty() {
+					// decryption changes state, so save the group
+					self.save_group(&latest).await?;
+					// and store the received props
+					self.storage.save_props(&props, epoch, guid, None).await
+				} else {
+					// it's OutdatedProps actually
+					Err(Error::OutdatedProp {
+						guid,
+						sender,
+						epoch,
+					})
+				}
 			} else {
 				Err(Error::EmptyProps { sender })
 			}
@@ -1122,7 +1120,7 @@ where
 				guid,
 				sender,
 				epoch,
-				ctx: "hand_commit".to_string(),
+				ctx: "handle_commit".to_string(),
 			}),
 			Equal => {
 				struct Diff {
