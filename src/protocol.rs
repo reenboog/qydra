@@ -103,6 +103,11 @@ pub enum Error {
 	FailedToProcessCommit {
 		ctx: String,
 	},
+	AccessDenied {
+		guid: Id,
+		epoch: u64,
+		ctx: String,
+	},
 	NoSuchUserInGroup {
 		nid: Nid,
 		guid: Id,
@@ -1312,10 +1317,43 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			// keep sending if fails
-			// consider pending_removes – use propose_remove_pending_removes_if_any
+			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let epoch = latest.epoch();
+			// remove pending removes, if any
+			let (removes_to_save, removes_to_send) = Self::propose_remove_if_any(
+				&mut latest,
+				&self.storage.get_pending_removes(guid).await?,
+			)
+			.into_iter()
+			.unzip();
 
-			todo!()
+			// TODO: check access rules to edit & Error::AccessDenied, if fails
+
+			if let Ok((edit_to_save, edit_to_send)) = latest.propose_edit(desc) {
+				let to_save = [removes_to_save, vec![edit_to_save]].concat();
+				let to_send = [removes_to_send, vec![edit_to_send]].concat();
+
+				let (commit, cti, ctds, _) =
+					latest.commit(&to_save).or(Err(Error::FailedToCommit {
+						ctx: "edit".to_string(),
+					}))?;
+
+				self.storage
+					.save_props(&to_save, epoch, guid, Some(commit.id()))
+					.await?;
+				self.storage.save_commit(&commit, commit.id(), guid).await?;
+				self.save_group(&latest).await?;
+
+				Ok(transport::Send::Edit(transport::SendEdit {
+					props: to_send,
+					commit: transport::SendCommit { cti, ctds },
+				}))
+			} else {
+				Err(Error::NoChangeRequired {
+					guid,
+					ctx: "same description".to_string(),
+				})
+			}
 		}
 	}
 
