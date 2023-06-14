@@ -1,37 +1,7 @@
-[package]
-name = "qydra"
-version = "0.1.0"
-edition = "2021"
-author = "Alex Gievsky"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-# keys
-ilum = { git = "https://github.com/reenboog/ilum", version = "0.1.0" }
-pqcrypto-dilithium = { version = "0.4.6" }
-pqcrypto-traits = { version = "0.3.4"}
-# 448 ec
-x448 = { version = "0.6" }
-
-# randomness
-rand = { version = "0.8.5" }
-rand-07 = { package = "rand", version = "0.7.0" }
-
-# crypto
-ring = { version = "0.16.20" }
-
-# hashing
-sha2 = { version = "0.10" }
-hmac = { version = "0.12.1" }
-
-# protobuf
-prost = { version = "0.9" }
-
-# concurrency
-tokio = { version = "1", features = ["full"] }
-async-trait = { version = "0.1" }
-futures = { version = "0.3" }
-
-[build-dependencies]
-prost-build = { version = "0.9" }
+members = [
+	"qydra",
+	"ds",
+	"playground",
+]

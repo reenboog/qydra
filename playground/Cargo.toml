@@ -1,0 +1,13 @@
+[package]
+name = "playground"
+version = "0.1.0"
+edition = "2021"
+author = "Alex Gievsky"
+
+[dependencies]
+qydra = { path = "../qydra" }
+
+# concurrency
+tokio = { version = "1", features = ["full"] }
+async-trait = { version = "0.1" }
+futures = { version = "0.3" }

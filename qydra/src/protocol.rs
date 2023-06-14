@@ -225,9 +225,9 @@ pub trait Storage {
 	// useful in case a device is added/removed between the tasks
 	async fn get_nids_for_nid(&self, nid: Nid) -> Result<Vec<Nid>, Error>;
 	// add nids to the existing list of whatever is stored for nid
-	async fn save_nids_for_nid(&self, new: &[Nid], nid: Nid) -> Result<(), Error>;
+	async fn save_nids(&self, new: &[Nid]) -> Result<(), Error>;
 	// detaches nids from nid
-	async fn remove_nids_for_nid(&self, remove: &[Nid], nid: Nid) -> Result<(), Error>;
+	async fn remove_nids(&self, remove: &[Nid]) -> Result<(), Error>;
 
 	// parent_commit = None for update props or content_id for add/remove/edit commits otherwise
 	async fn save_props(
@@ -245,14 +245,14 @@ pub trait Storage {
 		epoch: u64,
 		parent_commit: Option<Id>,
 	) -> Result<Vec<FramedProposal>, Error>;
-	async fn get_prop_by_id(&self, id: Id, epoch: u64, guid: Id) -> Result<FramedProposal, Error>;
+	async fn get_prop_by_id(&self, id: Id) -> Result<FramedProposal, Error>;
 	async fn delete_props(&self, guid: Id, epoch: u64) -> Result<(), Error>;
 
 	async fn save_commit(&self, commit: &FramedCommit, id: Id, guid: Id) -> Result<(), Error>;
 	// Ok(Commit) | Err(UnknownCommit)
-	async fn get_commit(&self, id: Id, epoch: u64, guid: Id) -> Result<FramedCommit, Error>;
+	async fn get_commit(&self, id: Id) -> Result<FramedCommit, Error>;
 	// there should actually be just one commit per epoch, so it might change
-	async fn delete_commits(&self, guid: Id, epoch: u64) -> Result<FramedCommit, Error>;
+	async fn delete_commits(&self, guid: Id, epoch: u64) -> Result<(), Error>;
 
 	// mark nid who previously sent LEAVE to remove during one of the next update cycles; do nothing if none found
 	async fn mark_as_pending_remove(&self, guid: Id, pending: bool, nid: Nid) -> Result<(), Error>;
@@ -444,9 +444,10 @@ where
 						// re-add each one of those whom I was going to add, if still required
 						self.add(
 							&future::try_join_all(
-								add.props.props.into_iter().map(|ct| {
-									self.storage.get_prop_by_id(ct.content_id, epoch, guid)
-								}),
+								add.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 							)
 							.await?
 							.into_iter()
@@ -573,13 +574,10 @@ where
 						add.props
 							.props
 							.into_iter()
-							.map(|ct| self.storage.get_prop_by_id(ct.content_id, epoch, guid)),
+							.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 					)
 					.await?;
-					let fc = self
-						.storage
-						.get_commit(add.commit.cti.content_id, epoch, guid)
-						.await?;
+					let fc = self.storage.get_commit(add.commit.cti.content_id).await?;
 
 					Ok((fps, fc))
 				}?;
@@ -683,9 +681,11 @@ where
 					Err(Error::NeedsAction(
 						self.remove(
 							&future::try_join_all(
-								remove.props.props.into_iter().map(|ct| {
-									self.storage.get_prop_by_id(ct.content_id, epoch, guid)
-								}),
+								remove
+									.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 							)
 							.await?
 							.into_iter()
@@ -802,13 +802,10 @@ where
 							.props
 							.props
 							.into_iter()
-							.map(|ct| self.storage.get_prop_by_id(ct.content_id, epoch, guid)),
+							.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 					)
 					.await?;
-					let fc = self
-						.storage
-						.get_commit(remove.cti.content_id, epoch, guid)
-						.await?;
+					let fc = self.storage.get_commit(remove.cti.content_id).await?;
 
 					Ok((fps, fc))
 				}?;
@@ -886,9 +883,10 @@ where
 					Err(Error::NeedsAction(
 						self.edit(
 							&future::try_join_all(
-								edit.props.props.into_iter().map(|ct| {
-									self.storage.get_prop_by_id(ct.content_id, epoch, guid)
-								}),
+								edit.props
+									.props
+									.into_iter()
+									.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 							)
 							.await?
 							.into_iter()
@@ -993,13 +991,10 @@ where
 						edit.props
 							.props
 							.into_iter()
-							.map(|ct| self.storage.get_prop_by_id(ct.content_id, epoch, guid)),
+							.map(|ct| self.storage.get_prop_by_id(ct.content_id)),
 					)
 					.await?;
-					let fc = self
-						.storage
-						.get_commit(edit.commit.cti.content_id, epoch, guid)
-						.await?;
+					let fc = self.storage.get_commit(edit.commit.cti.content_id).await?;
 
 					Ok((fps, fc))
 				}?;
@@ -1168,9 +1163,7 @@ where
 
 					Ok(fc)
 				} else {
-					self.storage
-						.get_commit(commit.cti.content_id, epoch, guid)
-						.await
+					self.storage.get_commit(commit.cti.content_id).await
 				}?;
 
 				let diff = filter_map_props(
@@ -1178,7 +1171,7 @@ where
 						fc.commit
 							.prop_ids
 							.iter()
-							.map(|id| self.storage.get_prop_by_id(*id, epoch, guid)),
+							.map(|id| self.storage.get_prop_by_id(*id)),
 					)
 					.await?,
 				);
