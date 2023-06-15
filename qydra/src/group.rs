@@ -4,7 +4,7 @@ use rand::Rng;
 
 use crate::ciphertext::{Ciphertext, ContentType};
 use crate::commit::{Commit, CommitCtd, FramedCommit, PendingCommit};
-use crate::dilithium::Signature;
+use crate::ed25519::{self, Signature};
 use crate::hash::{self, Hash, Hashable};
 use crate::hpkencrypt::CmpdCtd;
 use crate::id::{Id, Identifiable};
@@ -22,7 +22,7 @@ use crate::treemath::LeafIndex;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
 use crate::x448;
-use crate::{aes_gcm, dilithium, hkdf, hmac, hpkencrypt, key_schedule};
+use crate::{aes_gcm, hkdf, hmac, hpkencrypt, key_schedule};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, PartialEq)]
@@ -57,7 +57,7 @@ pub enum Error {
 	// I received a welcome, but I'm not in its roster
 	InvitedButNotInRoster,
 	// key advertised in the welcome message does not match with what's used for the roster
-	InitKeyMismatch,
+	PreKeyMismatch,
 	// whatever was encapsulated by the inviter is of unexpected form
 	WrongWelcomeFormat,
 	// I received my own update, validation passed, but no prestored (ssk, dk) pair was found which makes no sense
@@ -100,8 +100,8 @@ pub struct Group {
 	// my decryption key
 	ilum_dk: ilum::SecretKey,
 	x448_dk: x448::PrivateKey,
-	// my signature verificatin key
-	ssk: dilithium::PrivateKey,
+	// my signature verificatin key for the current epoch
+	ssk: ed25519::PrivateKey,
 
 	secrets: EpochSecrets,
 
@@ -115,7 +115,7 @@ pub struct Owner {
 	pub(crate) kp: KeyPackage,
 	pub(crate) ilum_dk: ilum::SecretKey,
 	pub(crate) x448_dk: x448::PrivateKey,
-	pub(crate) ssk: dilithium::PrivateKey,
+	pub(crate) ssk: ed25519::PrivateKey,
 }
 
 impl Group {
@@ -131,7 +131,7 @@ impl Group {
 		user_id: Nid,
 		ilum_dk: ilum::SecretKey,
 		x448_dk: x448::PrivateKey,
-		ssk: dilithium::PrivateKey,
+		ssk: ed25519::PrivateKey,
 		secrets: EpochSecrets,
 		description: Vec<u8>,
 	) -> Self {
@@ -197,7 +197,7 @@ impl Group {
 		&self.x448_dk
 	}
 
-	pub fn ssk(&self) -> &dilithium::PrivateKey {
+	pub fn ssk(&self) -> &ed25519::PrivateKey {
 		&self.ssk
 	}
 
@@ -304,9 +304,9 @@ impl Group {
 	}
 
 	pub fn propose_update(&mut self) -> (FramedProposal, Ciphertext) {
-		let (kp, ilum_sk, x448_sk, dilithium_sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk, ed25519_sk) = self.gen_kp();
 		let (fp, ct) = self.frame_proposal(Proposal::Update { kp });
-		let pu = PendingUpdate::new(ilum_sk, x448_sk, dilithium_sk);
+		let pu = PendingUpdate::new(ilum_sk, x448_sk, ed25519_sk);
 
 		self.pending_updates.insert(fp.id(), pu);
 
@@ -529,19 +529,19 @@ impl Group {
 		KeyPackage,
 		ilum::SecretKey,
 		x448::PrivateKey,
-		dilithium::PrivateKey,
+		ed25519::PrivateKey,
 	) {
 		let ilum_kp = ilum::gen_keypair(&self.seed);
 		let x448_kp = x448::KeyPair::generate();
-		let dilithium_kp = dilithium::KeyPair::generate();
+		let ed25519_kp = ed25519::KeyPair::generate();
 		let package = KeyPackage::new(
 			&ilum_kp.pk,
 			&x448_kp.public,
-			&dilithium_kp.public,
-			&dilithium_kp.private,
+			&ed25519_kp.public,
+			&ed25519_kp.private,
 		);
 
-		(package, ilum_kp.sk, x448_kp.private, dilithium_kp.private)
+		(package, ilum_kp.sk, x448_kp.private, ed25519_kp.private)
 	}
 
 	// returns FramedCommit (applied locally by those who commit), its encrypted variant, its ctds
@@ -783,12 +783,13 @@ impl Group {
 
 	// include the used keys as well?
 	// kp, dk & ssk should be fetched from a local storage by wd.kp_id
+	// FIXME: introduce sender_identity_keys
 	pub fn join(
 		id: &Nid,
 		kp: &KeyPackage,
 		ilum_dk: &ilum::SecretKey,
 		x448_dk: &x448::PrivateKey,
-		ssk: &dilithium::PrivateKey,
+		ssk: &ed25519::PrivateKey,
 		seed: &ilum::Seed,
 		wi: &WlcmCti,
 		wd: &CmpdCtd,
@@ -810,7 +811,7 @@ impl Group {
 			.map_or(Err(Error::InvitedButNotInRoster), |m| Ok(m))?;
 
 		if kp.id() != invitee.kp.id() {
-			return Err(Error::InitKeyMismatch);
+			return Err(Error::PreKeyMismatch);
 		}
 
 		let to_sign = Sha256::digest(info.hash());
@@ -923,13 +924,13 @@ impl Group {
 	// TODO: return (com, kp, enc) and apply instead of state change?
 	fn rekey(&mut self, receivers: &[Member]) -> (CommitSecret, KeyPackage, hpkencrypt::Encrypted) {
 		let com_secret = rand::thread_rng().gen::<CommitSecret>();
-		let (kp, ilum_sk, x448_sk, dilithium_sk) = self.gen_kp();
+		let (kp, ilum_sk, x448_sk, ed25519_sk) = self.gen_kp();
 
 		// should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
 		self.roster.set_kp(&self.user_id, &kp);
 		self.ilum_dk = ilum_sk;
 		self.x448_dk = x448_sk;
-		self.ssk = dilithium_sk;
+		self.ssk = ed25519_sk;
 
 		let keys = receivers
 			.iter()
@@ -1101,8 +1102,8 @@ impl Group {
 mod tests {
 	use super::{Error, Group, Owner};
 	use crate::{
-		ciphertext::ContentType, commit::FramedCommit, dilithium, key_package::KeyPackage,
-		msg::Msg, nid::Nid, proposal::FramedProposal, x448,
+		ciphertext::ContentType, commit::FramedCommit, ed25519, key_package::KeyPackage, msg::Msg,
+		nid::Nid, proposal::FramedProposal, x448,
 	};
 
 	#[test]
@@ -1131,7 +1132,7 @@ mod tests {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = dilithium::KeyPair::generate();
+		let alice_skp = ed25519::KeyPair::generate();
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
@@ -1151,7 +1152,7 @@ mod tests {
 		let bob_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_skp = ed25519::KeyPair::generate();
 		let bob_user_kp = KeyPackage::new(
 			&bob_user_ekp.pk,
 			&bob_x448_kp.public,
@@ -1223,7 +1224,7 @@ mod tests {
 		let charlie_id = Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_skp = ed25519::KeyPair::generate();
 		let charlie_user_kp = KeyPackage::new(
 			&charlie_user_ekp.pk,
 			&charlie_x448_kp.public,
@@ -1471,7 +1472,7 @@ mod tests {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = dilithium::KeyPair::generate();
+		let alice_skp = ed25519::KeyPair::generate();
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
@@ -1491,7 +1492,7 @@ mod tests {
 		let bob_user_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_skp = ed25519::KeyPair::generate();
 		let bob_user_kp = KeyPackage::new(
 			&bob_user_ekp.pk,
 			&bob_x448_kp.public,
@@ -1557,7 +1558,7 @@ mod tests {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = dilithium::KeyPair::generate();
+		let alice_skp = ed25519::KeyPair::generate();
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
@@ -1577,7 +1578,7 @@ mod tests {
 		let bob_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_skp = ed25519::KeyPair::generate();
 		let bob_user_kp = KeyPackage::new(
 			&bob_user_ekp.pk,
 			&bob_x448_kp.public,
@@ -1649,7 +1650,7 @@ mod tests {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = dilithium::KeyPair::generate();
+		let alice_skp = ed25519::KeyPair::generate();
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
@@ -1669,7 +1670,7 @@ mod tests {
 		let bob_id = Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_skp = ed25519::KeyPair::generate();
 		let bob_user_kp = KeyPackage::new(
 			&bob_user_ekp.pk,
 			&bob_x448_kp.public,
@@ -1704,7 +1705,7 @@ mod tests {
 		let charlie_id = Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_skp = ed25519::KeyPair::generate();
 		let charlie_user_kp = KeyPackage::new(
 			&charlie_user_ekp.pk,
 			&charlie_x448_kp.public,

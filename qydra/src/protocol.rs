@@ -43,7 +43,7 @@ use crate::{
 	commit::FramedCommit,
 	group::{Group, Owner},
 	id::{Id, Identifiable},
-	key_package::KeyPackage,
+	key_package::{self, KeyPackage},
 	msg::Msg,
 	nid::{self, Nid},
 	proposal::{FramedProposal, Proposal},
@@ -278,12 +278,12 @@ pub trait Storage {
 	async fn get_group(&self, uid: &Id, epoch: u64) -> Result<Group, Error>;
 	async fn get_latest_epoch(&self, guid: Id) -> Result<Group, Error>;
 	// someone used my public keys to invite me
-	async fn get_my_prekey_bundle(&self, id: Id) -> Result<transport::KeyBundle, Error>;
+	async fn get_my_prekey_bundle(&self, id: Id) -> Result<key_package::KeyBundle, Error>;
 	async fn delete_my_prekey_bundle(&self, id: Id) -> Result<(), Error>;
 	// my static qydra identity used to create all groups
 	// TODO: introduce an ephemeral package signed witha static identity?
 	// TODO: should it accept my Nid?
-	async fn get_my_identity_key_bundle(&self) -> Result<transport::KeyBundle, Error>;
+	async fn get_my_identity_key_bundle(&self) -> Result<key_package::KeyBundle, Error>;
 }
 
 #[async_trait]
@@ -311,7 +311,7 @@ where
 		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
-		let transport::KeyBundle {
+		let key_package::KeyBundle {
 			ilum_dk,
 			ilum_ek,
 			x448_dk,
@@ -321,6 +321,7 @@ where
 			sig,
 		} = self.storage.get_my_prekey_bundle(wlcm.kp_id).await?;
 
+		// identity_svk = api.get_identity_key(sender).await?;
 		// TODO: verify the inviter (sender) first (introduce a parameter)
 		// TODO: check whether the sender can invite me?
 		// wcti should be ecc-signed (implemented) & sign(ecc_sig + wlcm.hash) with dilithium
@@ -1666,7 +1667,9 @@ where
 			let kps = self.api.fetch_key_packages(invitees).await?;
 			// get my identity key bundle
 			// TODO: use just a static signing key instead of a bundle and sign an empeheral key package instead?
-			let transport::KeyBundle {
+			// KeyPackage should use ecc to sign stuff instead
+			// Prekey should be introduced and KeyPackage's signature + hash should be signed with a static Kyber key
+			let key_package::KeyBundle {
 				ilum_dk,
 				ilum_ek,
 				x448_dk,

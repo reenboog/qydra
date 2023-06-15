@@ -3,7 +3,7 @@ include!(concat!(env!("OUT_DIR"), "/qydra.rs"));
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hash, hpkencrypt, id,
+	aes_gcm, chain, chain_tree, ciphertext, commit, ed25519, group, hash, hpkencrypt, id,
 	key_package, key_schedule, member, nid, proposal, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
 	transport, treemath, update, welcome,
@@ -15,8 +15,8 @@ pub enum Error {
 	BadFormat,
 	WrongIlumKeySize,
 	WrongX448KeySize,
-	WrongDilithiumKeySize,
-	WrongDilithiumSigSize,
+	WrongEd25519KeySize,
+	WrongEd25519SigSize,
 	WrongIdSize,
 	WrongNidSize,
 	BadKeyPackageFormat,
@@ -71,7 +71,7 @@ pub enum Error {
 	WrongChainTree,
 	BadChainTreeFormat,
 	BadEpochSecretsFormat,
-	WrongInitKeySize,
+	WrongPreKeySize,
 	WrongMacKeySize,
 	BadPendingUpdateFormat,
 	BadPendingCommitFormat,
@@ -263,7 +263,7 @@ impl TryFrom<EpochSecrets> for key_schedule::EpochSecrets {
 
 	fn try_from(val: EpochSecrets) -> Result<Self, Self::Error> {
 		Ok(Self {
-			init: val.init.try_into().or(Err(Error::WrongInitKeySize))?,
+			init: val.init.try_into().or(Err(Error::WrongPreKeySize))?,
 			mac: val.mac.try_into().or(Err(Error::WrongMacKeySize))?,
 			hs: val.hs.try_into().or(Err(Error::BadChainTreeFormat))?,
 			app: val.app.try_into().or(Err(Error::BadChainTreeFormat))?,
@@ -306,7 +306,7 @@ impl TryFrom<PendingUpdate> for update::PendingUpdate {
 		Ok(Self {
 			ilum_dk: val.ilum_dk.try_into().or(Err(Error::WrongIlumKeySize))?,
 			x448_dk: val.x448_dk.try_into().or(Err(Error::WrongX448KeySize))?,
-			ssk: val.ssk.try_into().or(Err(Error::WrongDilithiumKeySize))?,
+			ssk: val.ssk.try_into().or(Err(Error::WrongEd25519KeySize))?,
 		})
 	}
 }
@@ -406,7 +406,7 @@ impl TryFrom<Group> for group::Group {
 			val.user_id.try_into().or(Err(Error::WrongNidSize))?,
 			val.ilum_dk.try_into().or(Err(Error::WrongIlumKeySize))?,
 			val.x448_dk.try_into().or(Err(Error::WrongX448KeySize))?,
-			val.ssk.try_into().or(Err(Error::WrongDilithiumKeySize))?,
+			val.ssk.try_into().or(Err(Error::WrongEd25519KeySize))?,
 			val.secrets
 				.try_into()
 				.or(Err(Error::BadEpochSecretsFormat))?,
@@ -497,10 +497,8 @@ impl TryFrom<KeyPackage> for key_package::KeyPackage {
 		Ok(Self {
 			ilum_ek: val.ilum_ek.try_into().or(Err(Error::WrongIlumKeySize))?,
 			x448_ek: val.x448_ek.try_into().or(Err(Error::WrongX448KeySize))?,
-			svk: dilithium::PublicKey::try_from(val.svk).or(Err(Error::WrongDilithiumKeySize))?,
-			sig: dilithium::Signature::new(
-				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
-			),
+			svk: ed25519::PublicKey::try_from(val.svk).or(Err(Error::WrongEd25519KeySize))?,
+			sig: ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 		})
 	}
 }
@@ -672,9 +670,7 @@ impl TryFrom<WlcmCti> for welcome::WlcmCti {
 	fn try_from(val: WlcmCti) -> Result<Self, Self::Error> {
 		Ok(Self {
 			cti: val.cti.try_into().or(Err(Error::BadCtiFormat))?,
-			sig: dilithium::Signature::new(
-				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
-			),
+			sig: ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 		})
 	}
 }
@@ -825,7 +821,7 @@ impl TryFrom<FramedProposal> for proposal::FramedProposal {
 			val.epoch,
 			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.prop.try_into().or(Err(Error::BadProposalFormat))?,
-			dilithium::Signature::new(val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?),
+			ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 			val.mac.try_into().or(Err(Error::WrongMacSize))?,
 			proposal::Nonce(val.nonce.try_into().or(Err(Error::WrongNonceSize))?),
 		))
@@ -1000,7 +996,7 @@ impl TryFrom<FramedCommit> for commit::FramedCommit {
 			val.epoch,
 			nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			val.commit.try_into().or(Err(Error::BadCommitFormat))?,
-			dilithium::Signature::new(val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?),
+			ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 			val.conf_tag.try_into().or(Err(Error::WrongMacSize))?,
 		))
 	}
@@ -1560,9 +1556,7 @@ impl TryFrom<Ciphertext> for ciphertext::Ciphertext {
 			gen: val.gen,
 			// sender: nid::Nid::try_from(val.sender).or(Err(Error::WrongIdSize))?,
 			iv: aes_gcm::Iv(val.iv.try_into().or(Err(Error::WrongIvSize))?),
-			sig: dilithium::Signature::new(
-				val.sig.try_into().or(Err(Error::WrongDilithiumSigSize))?,
-			),
+			sig: ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 			mac: val.mac.try_into().or(Err(Error::WrongMacSize))?,
 			reuse_grd: val
 				.reuse_grd
@@ -1897,7 +1891,7 @@ impl Deserializable for transport::Received {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, group, hmac, hpkencrypt, id,
+		aes_gcm, chain, chain_tree, ciphertext, commit, ed25519, group, hmac, hpkencrypt, id,
 		key_package, key_schedule, member, nid, proposal, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
 		transport, treemath, update, welcome, x448,
@@ -2037,7 +2031,7 @@ mod tests {
 		let pu = update::PendingUpdate {
 			ilum_dk: ilum.sk,
 			x448_dk: x448::KeyPair::generate().private,
-			ssk: dilithium::KeyPair::generate().private,
+			ssk: ed25519::KeyPair::generate().private,
 		};
 		let serialized = pu.serialize();
 		let deserialized = update::PendingUpdate::deserialize(&serialized);
@@ -2050,7 +2044,7 @@ mod tests {
 		let seed = [12u8; 16];
 		let alice_ekp = ilum::gen_keypair(&seed);
 		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = dilithium::KeyPair::generate();
+		let alice_skp = ed25519::KeyPair::generate();
 		let alice_id = nid::Nid::new(b"aliceali", 0);
 		let alice = group::Owner {
 			id: alice_id.clone(),
@@ -2070,7 +2064,7 @@ mod tests {
 		let bob_user_id = nid::Nid::new(b"bobbobbo", 0);
 		let bob_user_ekp = ilum::gen_keypair(&seed);
 		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = dilithium::KeyPair::generate();
+		let bob_user_skp = ed25519::KeyPair::generate();
 		let bob_user_kp = key_package::KeyPackage::new(
 			&bob_user_ekp.pk,
 			&bob_x448_kp.public,
@@ -2099,7 +2093,7 @@ mod tests {
 		let charlie_user_id = nid::Nid::new(b"charliec", 0);
 		let charlie_user_ekp = ilum::gen_keypair(&seed);
 		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = dilithium::KeyPair::generate();
+		let charlie_user_skp = ed25519::KeyPair::generate();
 		let charlie_user_kp = key_package::KeyPackage::new(
 			&charlie_user_ekp.pk,
 			&charlie_x448_kp.public,
@@ -2127,7 +2121,7 @@ mod tests {
 		let seed = b"1234567890abcdef";
 		let e_kp = ilum::gen_keypair(seed);
 		let x448_kp = x448::KeyPair::generate();
-		let s_kp = dilithium::KeyPair::generate();
+		let s_kp = ed25519::KeyPair::generate();
 		let pack =
 			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let serialized = pack.serialize();
@@ -2141,7 +2135,7 @@ mod tests {
 		let seed = b"1234567890abcdef";
 		let e_kp = ilum::gen_keypair(seed);
 		let x448_kp = x448::KeyPair::generate();
-		let s_kp = dilithium::KeyPair::generate();
+		let s_kp = ed25519::KeyPair::generate();
 		let pack =
 			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let member = member::Member::new(nid::Nid::new(b"abcdefgh", 0), pack, 7);
@@ -2160,8 +2154,8 @@ mod tests {
 			key_package::KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
-				svk: dilithium::PublicKey::new([56u8; 2592]),
-				sig: dilithium::Signature::new([78u8; 4595]),
+				svk: ed25519::PublicKey::new([56u8; ed25519::KeyPair::PUB]),
+				sig: ed25519::Signature::new([78u8; ed25519::Signature::SIZE]),
 			},
 			0,
 		));
@@ -2171,8 +2165,8 @@ mod tests {
 			key_package::KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
-				svk: dilithium::PublicKey::new([78u8; 2592]),
-				sig: dilithium::Signature::new([90u8; 4595]),
+				svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
+				sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			},
 			42,
 		));
@@ -2182,8 +2176,8 @@ mod tests {
 			key_package::KeyPackage {
 				ilum_ek: [78u8; 768],
 				x448_ek: x448::KeyPair::generate().public,
-				svk: dilithium::PublicKey::new([90u8; 2592]),
-				sig: dilithium::Signature::new([12u8; 4595]),
+				svk: ed25519::PublicKey::new([90u8; ed25519::KeyPair::PUB]),
+				sig: ed25519::Signature::new([12u8; ed25519::Signature::SIZE]),
 			},
 			3,
 		));
@@ -2201,8 +2195,8 @@ mod tests {
 		let kp = key_package::KeyPackage {
 			ilum_ek: [56u8; 768],
 			x448_ek: x448::KeyPair::generate().public,
-			svk: dilithium::PublicKey::new([78u8; 2592]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
 
 		let prop = Proposal::Remove {
@@ -2236,8 +2230,8 @@ mod tests {
 		let kp = key_package::KeyPackage {
 			ilum_ek: [56u8; 768],
 			x448_ek: x448::KeyPair::generate().public,
-			svk: dilithium::PublicKey::new([78u8; 2592]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
 		let prop = Proposal::Add {
 			id: nid::Nid::new(b"abcdefgh", 0),
@@ -2248,7 +2242,7 @@ mod tests {
 			17u64,
 			nid::Nid::new(b"ijklmnop", 0),
 			prop,
-			dilithium::Signature::new([42u8; 4595]),
+			ed25519::Signature::new([42u8; ed25519::Signature::SIZE]),
 			hmac::Digest([33u8; 32]),
 			proposal::Nonce([33u8; 4]),
 		);
@@ -2290,7 +2284,7 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let wcti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
 		let serialized = wcti.serialize();
 		let deserialized = welcome::WlcmCti::deserialize(&serialized);
 
@@ -2316,7 +2310,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2337,7 +2331,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2360,7 +2354,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2381,7 +2375,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2404,7 +2398,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2425,7 +2419,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2439,7 +2433,7 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let wcti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
 		let si = transport::SendInvite {
@@ -2462,7 +2456,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2485,7 +2479,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2496,7 +2490,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2529,7 +2523,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2553,7 +2547,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2577,7 +2571,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2600,7 +2594,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2621,7 +2615,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2635,7 +2629,7 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cmpd_cti, dilithium::Signature::new([57u8; 4595]));
+		let wcti = welcome::WlcmCti::new(cmpd_cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
 		let si = transport::SendInvite {
@@ -2705,8 +2699,8 @@ mod tests {
 		let kp = key_package::KeyPackage {
 			ilum_ek: [56u8; 768],
 			x448_ek: x448::KeyPair::generate().public,
-			svk: dilithium::PublicKey::new([78u8; 2592]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
 		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
@@ -2730,8 +2724,8 @@ mod tests {
 		let kp = key_package::KeyPackage {
 			ilum_ek: [56u8; 768],
 			x448_ek: x448::KeyPair::generate().public,
-			svk: dilithium::PublicKey::new([78u8; 2592]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
 		let cti = hpkencrypt::CmpdCti::new(
 			vec![1, 2, 3, 4, 5, 6, 7],
@@ -2750,7 +2744,7 @@ mod tests {
 			42,
 			nid::Nid::new(b"abcdefgh", 0),
 			commit,
-			dilithium::Signature::new([77u8; 4595]),
+			ed25519::Signature::new([77u8; ed25519::Signature::SIZE]),
 			hmac::Digest([22u8; 32]),
 		);
 		let serialized = fc.serialize();
@@ -2784,7 +2778,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2812,7 +2806,7 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let cti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wlcm = transport::ReceivedWelcome {
 			cti,
@@ -2834,7 +2828,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2855,7 +2849,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2866,7 +2860,7 @@ mod tests {
 			epoch: 102,
 			gen: 2023,
 			iv: aes_gcm::Iv([98u8; 12]),
-			sig: dilithium::Signature::new([30u8; 4595]),
+			sig: ed25519::Signature::new([30u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2888,7 +2882,7 @@ mod tests {
 			epoch: 102,
 			gen: 2023,
 			iv: aes_gcm::Iv([98u8; 12]),
-			sig: dilithium::Signature::new([30u8; 4595]),
+			sig: ed25519::Signature::new([30u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2900,7 +2894,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2925,7 +2919,7 @@ mod tests {
 			epoch: 102,
 			gen: 2023,
 			iv: aes_gcm::Iv([98u8; 12]),
-			sig: dilithium::Signature::new([30u8; 4595]),
+			sig: ed25519::Signature::new([30u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2937,7 +2931,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2972,7 +2966,7 @@ mod tests {
 			epoch: 102,
 			gen: 2023,
 			iv: aes_gcm::Iv([98u8; 12]),
-			sig: dilithium::Signature::new([30u8; 4595]),
+			sig: ed25519::Signature::new([30u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -2983,7 +2977,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -3007,7 +3001,7 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let cti = welcome::WlcmCti::new(cti, dilithium::Signature::new([57u8; 4595]));
+		let cti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wlcm = transport::ReceivedWelcome {
 			cti,
@@ -3027,7 +3021,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -3058,7 +3052,7 @@ mod tests {
 			epoch: 102,
 			gen: 2023,
 			iv: aes_gcm::Iv([98u8; 12]),
-			sig: dilithium::Signature::new([30u8; 4595]),
+			sig: ed25519::Signature::new([30u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([71u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};
@@ -3109,7 +3103,7 @@ mod tests {
 			epoch: 77,
 			gen: 1984,
 			iv: aes_gcm::Iv([78u8; 12]),
-			sig: dilithium::Signature::new([90u8; 4595]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			mac: hmac::Digest([11u8; 32]),
 			reuse_grd: reuse_guard::ReuseGuard::new(),
 		};

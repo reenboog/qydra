@@ -1,6 +1,6 @@
 use crate::{
-	ciphertext::Ciphertext, commit::CommitCtd, dilithium, hpkencrypt::CmpdCtd, id::Id, nid::Nid,
-	welcome::WlcmCtd, welcome::WlcmCti, x448,
+	ciphertext::Ciphertext, commit::CommitCtd, hpkencrypt::CmpdCtd, id::Id, nid::Nid,
+	welcome::WlcmCtd, welcome::WlcmCti,
 };
 
 #[derive(PartialEq, Debug, Clone)]
@@ -116,15 +116,4 @@ pub enum Received {
 	Commit(ReceivedCommit),
 	Leave(Ciphertext),
 	Msg(Ciphertext),
-}
-
-// private keys + public KeyPackage
-pub struct KeyBundle {
-	pub ilum_dk: ilum::SecretKey,
-	pub ilum_ek: ilum::PublicKey,
-	pub x448_dk: x448::PrivateKey,
-	pub x448_ek: x448::PublicKey,
-	pub ssk: dilithium::PrivateKey,
-	pub svk: dilithium::PublicKey,
-	pub sig: dilithium::Signature,
 }

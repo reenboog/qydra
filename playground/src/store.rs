@@ -8,10 +8,10 @@ use qydra::{
 	commit::FramedCommit,
 	group::Group,
 	id::{Id, Identifiable},
+	key_package,
 	nid::Nid,
 	proposal::FramedProposal,
 	protocol::{self, Error},
-	transport,
 };
 use tokio::sync::Mutex;
 
@@ -294,7 +294,7 @@ impl protocol::Storage for Store {
 			.clone())
 	}
 	// someone used my public keys to invite me
-	async fn get_my_prekey_bundle(&self, id: Id) -> Result<transport::KeyBundle, Error> {
+	async fn get_my_prekey_bundle(&self, id: Id) -> Result<key_package::KeyBundle, Error> {
 		todo!()
 	}
 	async fn delete_my_prekey_bundle(&self, id: Id) -> Result<(), Error> {
@@ -303,7 +303,7 @@ impl protocol::Storage for Store {
 	// my static qydra identity used to create all groups
 	// TODO: introduce an ephemeral package signed witha static identity?
 	// TODO: should it accept my Nid?
-	async fn get_my_identity_key_bundle(&self) -> Result<transport::KeyBundle, Error> {
+	async fn get_my_identity_key_bundle(&self) -> Result<key_package::KeyBundle, Error> {
 		todo!()
 	}
 }

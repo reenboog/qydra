@@ -1,5 +1,5 @@
 use crate::{
-	dilithium::Signature,
+	ed25519::Signature,
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt,
 	id::Id,

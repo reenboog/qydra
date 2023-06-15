@@ -106,7 +106,7 @@ impl Hashable for Roster {
 mod tests {
 	use super::Roster;
 	use crate::{
-		dilithium::{PublicKey, Signature},
+		ed25519::{PublicKey, Signature, KeyPair},
 		hash::Hashable,
 		key_package::KeyPackage,
 		member::Member,
@@ -121,8 +121,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			0,
 		));
@@ -141,8 +141,8 @@ mod tests {
 				KeyPackage {
 					ilum_ek: [34u8; 768],
 					x448_ek: x448::PublicKey::from(&[1u8; 56]),
-					svk: PublicKey::new([56u8; 2592]),
-					sig: Signature::new([78u8; 4595]),
+					svk: PublicKey::new([56u8; KeyPair::PUB]),
+					sig: Signature::new([78u8; Signature::SIZE]),
 				},
 				1
 			))
@@ -154,8 +154,8 @@ mod tests {
 				KeyPackage {
 					ilum_ek: [56u8; 768],
 					x448_ek: x448::PublicKey::from(&[1u8; 56]),
-					svk: PublicKey::new([78u8; 2592]),
-					sig: Signature::new([90u8; 4595]),
+					svk: PublicKey::new([78u8; KeyPair::PUB]),
+					sig: Signature::new([90u8; Signature::SIZE]),
 				},
 				0
 			))
@@ -169,8 +169,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			22,
 		));
@@ -180,8 +180,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [22u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([33u8; 2592]),
-				sig: Signature::new([77u8; 4595]),
+				svk: PublicKey::new([33u8; KeyPair::PUB]),
+				sig: Signature::new([77u8; Signature::SIZE]),
 			},
 			0,
 		));
@@ -214,8 +214,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			0,
 		));
@@ -228,8 +228,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			0,
 		));
@@ -248,8 +248,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			21,
 		));
@@ -259,8 +259,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([78u8; 2592]),
-				sig: Signature::new([90u8; 4595]),
+				svk: PublicKey::new([78u8; KeyPair::PUB]),
+				sig: Signature::new([90u8; Signature::SIZE]),
 			},
 			1,
 		));
@@ -273,8 +273,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([78u8; 2592]),
-				sig: Signature::new([90u8; 4595]),
+				svk: PublicKey::new([78u8; KeyPair::PUB]),
+				sig: Signature::new([90u8; Signature::SIZE]),
 			},
 			1,
 		));
@@ -284,8 +284,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			21,
 		));
@@ -304,8 +304,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [56u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([78u8; 2592]),
-				sig: Signature::new([90u8; 4595]),
+				svk: PublicKey::new([78u8; KeyPair::PUB]),
+				sig: Signature::new([90u8; Signature::SIZE]),
 			},
 			4,
 		));
@@ -315,8 +315,8 @@ mod tests {
 			KeyPackage {
 				ilum_ek: [34u8; 768],
 				x448_ek: x448::PublicKey::from(&[1u8; 56]),
-				svk: PublicKey::new([56u8; 2592]),
-				sig: Signature::new([78u8; 4595]),
+				svk: PublicKey::new([56u8; KeyPair::PUB]),
+				sig: Signature::new([78u8; Signature::SIZE]),
 			},
 			1,
 		));

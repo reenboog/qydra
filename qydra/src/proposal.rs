@@ -1,5 +1,5 @@
 use crate::{
-	dilithium::Signature,
+	ed25519::Signature,
 	hash::{Hash, Hashable},
 	hmac::Digest,
 	id::{Id, Identifiable},
@@ -11,7 +11,7 @@ use crate::{
 pub enum Proposal {
 	Remove { id: Nid },
 	Update { kp: KeyPackage },
-	Add { id: Nid, kp: KeyPackage },
+	Add { id: Nid, kp: KeyPackage }, // FIXME: Prekey instead?
 	Edit { description: Vec<u8> },
 }
 

@@ -11,8 +11,9 @@ author = "Alex Gievsky"
 ilum = { git = "https://github.com/reenboog/ilum", version = "0.1.0" }
 pqcrypto-dilithium = { version = "0.4.6" }
 pqcrypto-traits = { version = "0.3.4"}
-# 448 ec
+# ecc
 x448 = { version = "0.6" }
+ed25519-dalek = "1.0.1"
 
 # randomness
 rand = { version = "0.8.5" }

@@ -4,6 +4,7 @@ pub mod chain_tree;
 pub mod ciphertext;
 pub mod commit;
 pub mod dilithium;
+pub mod ed25519;
 pub mod group;
 pub mod hash;
 pub mod hkdf;
