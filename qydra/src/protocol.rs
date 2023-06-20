@@ -327,7 +327,7 @@ where
 						self.storage.save_identity_key(&sender, &key).await?;
 
 						Ok(key)
-					},
+					}
 					// we won't be able to proceed with this group, if it's IdentityNotFound
 					// otherwise, more likely a network error/db locked – retry later
 					Err(err) => Err(err),

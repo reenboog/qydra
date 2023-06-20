@@ -9,8 +9,8 @@ use crate::{private_key, public_key};
 
 #[derive(Debug, PartialEq)]
 pub struct KeyTypeDilithium;
-pub type PrivateKey = private_key::PrivateKey<KeyTypeDilithium, SK_BYTES>;
-pub type PublicKey = public_key::PublicKey<KeyTypeDilithium, PK_BYTES>;
+pub type PrivateKey = private_key::PrivateKey<KeyTypeDilithium, { KeyPair::PRIV }>;
+pub type PublicKey = public_key::PublicKey<KeyTypeDilithium, { KeyPair::PUB }>;
 
 impl PrivateKey {
 	pub fn sign(&self, msg: &[u8]) -> Signature {
@@ -46,6 +46,9 @@ pub struct KeyPair {
 }
 
 impl KeyPair {
+	pub const PRIV: usize = SK_BYTES;
+	pub const PUB: usize = PK_BYTES;
+
 	pub fn generate() -> KeyPair {
 		use pqcrypto_dilithium::dilithium5aes::keypair;
 		use pqcrypto_traits::sign::{PublicKey, SecretKey};

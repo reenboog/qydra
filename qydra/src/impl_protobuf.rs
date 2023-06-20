@@ -2207,6 +2207,30 @@ mod tests {
 	}
 
 	#[test]
+	fn test_hpksignature() {
+		let sig = hpksign::Signature {
+			dilithium: dilithium::Signature::new([22u8; dilithium::Signature::SIZE]),
+			ed25519: ed25519::Signature::new([33u8; ed25519::Signature::SIZE]),
+		};
+		let serialized = sig.serialize();
+		let deserialized = hpksign::Signature::deserialize(&serialized);
+
+		assert_eq!(Ok(sig), deserialized);
+	}
+
+	#[test]
+	fn test_hpksign_private_key() {
+		let pk = hpksign::PrivateKey {
+			ed25519: ed25519::PrivateKey::new([11u8; ed25519::KeyPair::PRIV]),
+			dilithium: dilithium::PrivateKey::new([11u8; dilithium::KeyPair::PRIV]),
+		};
+		let serialized = pk.serialize();
+		let deserialized = hpksign::PrivateKey::deserialize(&serialized);
+
+		assert_eq!(Ok(pk), deserialized);
+	}
+
+	#[test]
 	fn test_key_package() {
 		let seed = b"1234567890abcdef";
 		let e_kp = ilum::gen_keypair(seed);
