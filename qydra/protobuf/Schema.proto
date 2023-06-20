@@ -19,10 +19,10 @@ message Group {
 	required bytes ilum_dk = 10;
 	required bytes x448_dk = 11;
 	required bytes ssk = 12;
+	required HpkSignPrivateKey identity = 13;
 
-	required EpochSecrets secrets = 13;
-
-	required bytes description = 14;
+	required EpochSecrets secrets = 14;
+	required bytes description = 15;
 }
 
 message ChainTree {
@@ -76,6 +76,17 @@ message PendingUpdateEntry {
 	required PendingUpdate upd = 2;
 }
 
+message HpkSignPrivateKey {
+	required bytes ed25519 = 1;
+	required bytes dilithium = 2;
+}
+
+message HpkSignature {
+	required bytes ed25519 = 1;
+	required bytes dilithium = 2;
+}
+
+// corresponds to key_package::PublicKey
 message KeyPackage {
 	required bytes ilum_ek = 1;
 	required bytes x448_ek = 2;
@@ -192,7 +203,8 @@ message Ciphertext {
 
 message WlcmCti {
 	required CmpdCti cti = 1;
-	required bytes sig = 2;
+	required bytes roster_sig = 2;
+	required HpkSignature identity_sig = 3;
 }
 
 message WlcmCtd {
@@ -261,7 +273,6 @@ message SendInvite {
 	//	send_to(ctd.user_id, Received { ReceivedWlcm { wcti, ctd.ctd, ctd.kp_id } })
 	// })
 	// welcome cti
-	// TODO: dilithium-sign wcti
 	required WlcmCti wcti = 1;
 	// welcome ctds
 	repeated WlcmCtd wctds = 2;

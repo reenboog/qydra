@@ -42,10 +42,12 @@ use crate::{
 	ciphertext::{Ciphertext, ContentType},
 	commit::FramedCommit,
 	group::{Group, Owner},
+	hpksign,
 	id::{Id, Identifiable},
-	key_package::{self, KeyPackage},
+	key_package,
 	msg::Msg,
 	nid::{self, Nid},
+	prekey,
 	proposal::{FramedProposal, Proposal},
 	transport::{self, SendLeave, SendMsg},
 };
@@ -58,7 +60,9 @@ pub const ILUM_SEED: &[u8; 16] =
 pub enum Error {
 	// the app is locked, retry later
 	DbLocked,
+	NoNetwork,
 	KeyPackageNotFound(Id),
+	IdentityNotFound(Nid),
 	FailedToJoin,
 	GroupAlreadyExists {
 		guid: Id,
@@ -278,18 +282,21 @@ pub trait Storage {
 	async fn get_group(&self, uid: &Id, epoch: u64) -> Result<Group, Error>;
 	async fn get_latest_epoch(&self, guid: Id) -> Result<Group, Error>;
 	// someone used my public keys to invite me
-	async fn get_my_prekey_bundle(&self, id: Id) -> Result<key_package::KeyBundle, Error>;
-	async fn delete_my_prekey_bundle(&self, id: Id) -> Result<(), Error>;
-	// my static qydra identity used to create all groups
-	// TODO: introduce an ephemeral package signed witha static identity?
-	// TODO: should it accept my Nid?
-	async fn get_my_identity_key_bundle(&self) -> Result<key_package::KeyBundle, Error>;
+	async fn get_my_prekey(&self, id: Id) -> Result<prekey::KeyPair, Error>;
+	async fn delete_my_prekey(&self, id: Id) -> Result<(), Error>;
+
+	// TODO: introduce topup
+	async fn get_my_identity_keys(&self) -> Result<hpksign::PrivateKey, Error>;
+	async fn get_identity_key(&self, nid: &Nid) -> Result<hpksign::PublicKey, Error>;
+	async fn save_identity_key(&self, nid: &Nid, key: &hpksign::PublicKey) -> Result<(), Error>;
 }
 
 #[async_trait]
 pub trait Api {
 	// returns init key packages for the specified nids; empty, if nids are empty
-	async fn fetch_key_packages(&self, nid: &[Nid]) -> Result<Vec<KeyPackage>, Error>;
+	async fn fetch_prekeys(&self, nid: &[Nid]) -> Result<Vec<prekey::PublicKey>, Error>;
+	// invitees can use it to verify welcome messages; may be stored locally to speed things up and for TOFU purposes
+	async fn fetch_identity_key(&self, nid: &Nid) -> Result<hpksign::PublicKey, Error>;
 }
 
 pub struct Protocol<S, A> {
@@ -311,32 +318,33 @@ where
 		sender: Nid,
 		receiver: Nid,
 	) -> Result<(), Error> {
-		let key_package::KeyBundle {
-			ilum_dk,
-			ilum_ek,
-			x448_dk,
-			x448_ek,
-			ssk,
-			svk,
-			sig,
-		} = self.storage.get_my_prekey_bundle(wlcm.kp_id).await?;
+		// check if we already have identity keys for the sender; fetch and save, if not
+		let inviter_identity = match self.storage.get_identity_key(&sender).await {
+			Ok(key) => Ok(key),
+			Err(Error::IdentityNotFound(_)) => {
+				match self.api.fetch_identity_key(&sender).await {
+					Ok(key) => {
+						self.storage.save_identity_key(&sender, &key).await?;
 
-		// identity_svk = api.get_identity_key(sender).await?;
-		// TODO: verify the inviter (sender) first (introduce a parameter)
+						Ok(key)
+					},
+					// we won't be able to proceed with this group, if it's IdentityNotFound
+					// otherwise, more likely a network error/db locked – retry later
+					Err(err) => Err(err),
+				}
+			}
+			Err(err) => Err(err),
+		}?;
+
+		let prekey = self.storage.get_my_prekey(wlcm.kp_id).await?;
+		let my_identity = self.storage.get_my_identity_keys().await?;
+
 		// TODO: check whether the sender can invite me?
-		// wcti should be ecc-signed (implemented) & sign(ecc_sig + wlcm.hash) with dilithium
-
 		let group = Group::join(
 			&receiver,
-			&KeyPackage {
-				ilum_ek,
-				x448_ek,
-				svk,
-				sig,
-			},
-			&ilum_dk,
-			&x448_dk,
-			&ssk,
+			my_identity,
+			prekey,
+			&inviter_identity,
 			ILUM_SEED,
 			&wlcm.cti,
 			&wlcm.ctd,
@@ -1409,7 +1417,7 @@ where
 				.cloned()
 				.collect::<Vec<Nid>>();
 
-			let kps = self.api.fetch_key_packages(&nids_to_add).await?;
+			let kps = self.api.fetch_prekeys(&nids_to_add).await?;
 			let (adds_to_save, adds_to_send): (Vec<_>, Vec<_>) = nids_to_add
 				.iter()
 				.zip(kps.into_iter())
@@ -1419,7 +1427,6 @@ where
 				.unzip();
 
 			// a2
-			// TODO: always do it for my (sender) nids instead
 			let (detaches_to_save, detaches_to_send): (Vec<_>, Vec<_>) =
 				if all_nids.iter().any(|n| n.is_same_id(&sender)) {
 					roster
@@ -1663,33 +1670,15 @@ where
 		if invitees.is_empty() {
 			Err(Error::NoEmptyGroupsAllowed)
 		} else {
-			// fetch prekeys for each invitee
-			let kps = self.api.fetch_key_packages(invitees).await?;
-			// get my identity key bundle
-			// TODO: use just a static signing key instead of a bundle and sign an empeheral key package instead?
-			// KeyPackage should use ecc to sign stuff instead
-			// Prekey should be introduced and KeyPackage's signature + hash should be signed with a static Kyber key
-			let key_package::KeyBundle {
-				ilum_dk,
-				ilum_ek,
-				x448_dk,
-				x448_ek,
-				ssk,
-				svk,
-				sig,
-			} = self.storage.get_my_identity_key_bundle().await?;
+			let identity = self.storage.get_my_identity_keys().await?;
+			let kp = key_package::KeyPair::generate(ILUM_SEED);
 			let owner = Owner {
 				id: owner_id,
-				kp: KeyPackage {
-					ilum_ek,
-					x448_ek,
-					svk,
-					sig,
-				},
-				ilum_dk,
-				x448_dk,
-				ssk,
+				kp,
+				identity,
 			};
+			// fetch prekeys for each invitee
+			let kps = self.api.fetch_prekeys(invitees).await?;
 			// create a group of size 1 containing just me
 			let mut group = Group::create(ILUM_SEED.to_owned(), owner);
 			// propose to add everyone

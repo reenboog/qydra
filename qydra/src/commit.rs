@@ -4,7 +4,7 @@ use crate::{
 	hash::Hashable,
 	hmac, hpkencrypt,
 	id::{Id, Identifiable},
-	key_package::KeyPackage,
+	key_package,
 	nid::Nid,
 };
 use sha2::{Digest, Sha256};
@@ -20,7 +20,7 @@ pub struct PendingCommit {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Commit {
 	// committer new key package
-	pub kp: KeyPackage,
+	pub kp: key_package::PublicKey,
 	// key-independent, compound (multi-layered) encapsulation
 	pub cti: hpkencrypt::CmpdCti,
 	// proposal ids; order is important, so should be pre-sorted/validated

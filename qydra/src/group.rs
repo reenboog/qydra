@@ -8,7 +8,6 @@ use crate::ed25519::{self, Signature};
 use crate::hash::{self, Hash, Hashable};
 use crate::hpkencrypt::CmpdCtd;
 use crate::id::{Id, Identifiable};
-use crate::key_package::KeyPackage;
 use crate::key_schedule::{
 	CommitSecret, ConfirmationSecret, EpochSecrets, JoinerSecret, MacSecret,
 };
@@ -21,8 +20,9 @@ use crate::serializable::{Deserializable, Serializable};
 use crate::treemath::LeafIndex;
 use crate::update::PendingUpdate;
 use crate::welcome::{self, WlcmCtd, WlcmCti};
-use crate::x448;
 use crate::{aes_gcm, hkdf, hmac, hpkencrypt, key_schedule};
+use crate::{hpksign, x448};
+use crate::{key_package, prekey};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, PartialEq)]
@@ -97,11 +97,14 @@ pub struct Group {
 	// FIXME: introduce a struct similar to Owner
 	// my id
 	user_id: Nid,
-	// my decryption key
+	// my decryption keys for the current epoch
 	ilum_dk: ilum::SecretKey,
 	x448_dk: x448::PrivateKey,
-	// my signature verificatin key for the current epoch
+	// my signing key for the current epoch
 	ssk: ed25519::PrivateKey,
+
+	// my static compound signing keys
+	identity: hpksign::PrivateKey,
 
 	secrets: EpochSecrets,
 
@@ -112,10 +115,8 @@ pub struct Group {
 #[derive(Clone)]
 pub struct Owner {
 	pub(crate) id: Nid,
-	pub(crate) kp: KeyPackage,
-	pub(crate) ilum_dk: ilum::SecretKey,
-	pub(crate) x448_dk: x448::PrivateKey,
-	pub(crate) ssk: ed25519::PrivateKey,
+	pub(crate) kp: key_package::KeyPair,
+	pub(crate) identity: hpksign::PrivateKey,
 }
 
 impl Group {
@@ -132,6 +133,7 @@ impl Group {
 		ilum_dk: ilum::SecretKey,
 		x448_dk: x448::PrivateKey,
 		ssk: ed25519::PrivateKey,
+		identity: hpksign::PrivateKey,
 		secrets: EpochSecrets,
 		description: Vec<u8>,
 	) -> Self {
@@ -148,6 +150,7 @@ impl Group {
 			ilum_dk,
 			x448_dk,
 			ssk,
+			identity,
 			secrets,
 			description,
 		}
@@ -201,6 +204,10 @@ impl Group {
 		&self.ssk
 	}
 
+	pub fn identity(&self) -> &hpksign::PrivateKey {
+		&self.identity
+	}
+
 	pub fn secrets(&self) -> &EpochSecrets {
 		&self.secrets
 	}
@@ -211,7 +218,7 @@ impl Group {
 
 	// generates a group owned by owner; recipients should use a different initializer!
 	pub fn create(seed: ilum::Seed, owner: Owner) -> Self {
-		let roster = Roster::from(Member::new(owner.id, owner.kp, 0));
+		let roster = Roster::from(Member::new(owner.id, owner.kp.public, 0));
 		let uid = Id(rand::thread_rng().gen());
 		let epoch = 0;
 		let joiner_secret = rand::thread_rng().gen();
@@ -238,9 +245,11 @@ impl Group {
 
 			user_id: owner.id,
 
-			ilum_dk: owner.ilum_dk,
-			x448_dk: owner.x448_dk,
-			ssk: owner.ssk,
+			ilum_dk: owner.kp.private.ilum,
+			x448_dk: owner.kp.private.x448,
+			ssk: owner.kp.private.ssk,
+
+			identity: owner.identity,
 
 			secrets,
 			description,
@@ -283,14 +292,14 @@ impl Group {
 	pub fn propose_add(
 		&mut self,
 		id: Nid,
-		kp: KeyPackage,
+		kp: prekey::PublicKey,
 	) -> Result<(FramedProposal, Ciphertext), Error> {
 		if self.roster.contains(&id) {
 			Err(Error::UserAlreadyExists)
 		} else if !kp.verify() {
 			Err(Error::InvalidKeyPair)
 		} else {
-			Ok(self.frame_proposal(Proposal::Add { id, kp }))
+			Ok(self.frame_proposal(Proposal::Add { id, kp: kp.kp }))
 		}
 	}
 
@@ -304,9 +313,12 @@ impl Group {
 	}
 
 	pub fn propose_update(&mut self) -> (FramedProposal, Ciphertext) {
-		let (kp, ilum_sk, x448_sk, ed25519_sk) = self.gen_kp();
+		let key_package::KeyPair {
+			private: key_package::PrivateKey { ilum, x448, ssk },
+			public: kp,
+		} = self.gen_kp();
 		let (fp, ct) = self.frame_proposal(Proposal::Update { kp });
-		let pu = PendingUpdate::new(ilum_sk, x448_sk, ed25519_sk);
+		let pu = PendingUpdate::new(ilum, x448, ssk);
 
 		self.pending_updates.insert(fp.id(), pu);
 
@@ -523,25 +535,8 @@ impl Group {
 		}
 	}
 
-	fn gen_kp(
-		&self,
-	) -> (
-		KeyPackage,
-		ilum::SecretKey,
-		x448::PrivateKey,
-		ed25519::PrivateKey,
-	) {
-		let ilum_kp = ilum::gen_keypair(&self.seed);
-		let x448_kp = x448::KeyPair::generate();
-		let ed25519_kp = ed25519::KeyPair::generate();
-		let package = KeyPackage::new(
-			&ilum_kp.pk,
-			&x448_kp.public,
-			&ed25519_kp.public,
-			&ed25519_kp.private,
-		);
-
-		(package, ilum_kp.sk, x448_kp.private, ed25519_kp.private)
+	fn gen_kp(&self) -> key_package::KeyPair {
+		key_package::KeyPair::generate(&self.seed)
 	}
 
 	// returns FramedCommit (applied locally by those who commit), its encrypted variant, its ctds
@@ -699,7 +694,8 @@ impl Group {
 			if let Some(ctd) = ctd {
 				new.conf_trans_hash = self.derive_conf_trans_hash(&sender, &commit, &sig);
 
-				let ilum_ek = self.roster.get(&self.user_id).unwrap().kp.ilum_ek;
+				// TODO: store the whole key pair instead of just private keys
+				let ilum_ek = self.roster.get(&self.user_id).unwrap().kp.ilum;
 				let com_secret = CommitSecret::try_from(
 					hpkencrypt::decrypt(
 						&commit.cti,
@@ -764,13 +760,16 @@ impl Group {
 			);
 			let keys = invited
 				.iter()
-				.map(|m| (m.kp.ilum_ek.clone(), m.kp.x448_ek.clone()))
+				.map(|m| (m.kp.ilum.clone(), m.kp.x448.clone()))
 				.collect::<Vec<(ilum::PublicKey, x448::PublicKey)>>();
 
 			let encryption = hpkencrypt::encrypt(&info.serialize(), &self.seed, &keys);
-			let to_sign = Sha256::digest(info.hash());
-			let sig = self.ssk.sign(&to_sign);
-			let cti = WlcmCti::new(encryption.cti, sig);
+			let to_ed25519_sign = info.hash();
+			let roster_sig = self.ssk.sign(&to_ed25519_sign);
+			let to_hpk_sign =
+				Sha256::digest([to_ed25519_sign.as_slice(), roster_sig.as_bytes()].concat());
+			let identity_sig = self.identity.sign(&to_hpk_sign);
+			let cti = WlcmCti::new(encryption.cti, roster_sig, identity_sig);
 			let ctds = invited
 				.iter()
 				.enumerate()
@@ -781,22 +780,26 @@ impl Group {
 		}
 	}
 
-	// include the used keys as well?
 	// kp, dk & ssk should be fetched from a local storage by wd.kp_id
-	// FIXME: introduce sender_identity_keys
 	pub fn join(
 		id: &Nid,
-		kp: &KeyPackage,
-		ilum_dk: &ilum::SecretKey,
-		x448_dk: &x448::PrivateKey,
-		ssk: &ed25519::PrivateKey,
+		identity: hpksign::PrivateKey,
+		prekey: prekey::KeyPair,
+		inviter_identity: &hpksign::PublicKey,
 		seed: &ilum::Seed,
 		wi: &WlcmCti,
 		wd: &CmpdCtd,
 	) -> Result<Self, Error> {
 		let info = welcome::Info::deserialize(
-			&hpkencrypt::decrypt(&wi.cti, &wd, seed, &kp.ilum_ek, &ilum_dk, x448_dk)
-				.or(Err(Error::HpkeDecryptFailed))?,
+			&hpkencrypt::decrypt(
+				&wi.cti,
+				&wd,
+				seed,
+				&prekey.kp.public.ilum,
+				&prekey.kp.private.ilum,
+				&prekey.kp.private.x448,
+			)
+			.or(Err(Error::HpkeDecryptFailed))?,
 		)
 		.or(Err(Error::WrongWelcomeFormat))?;
 
@@ -810,13 +813,17 @@ impl Group {
 			.get(id)
 			.map_or(Err(Error::InvitedButNotInRoster), |m| Ok(m))?;
 
-		if kp.id() != invitee.kp.id() {
+		if prekey.id() != invitee.kp.id() {
 			return Err(Error::PreKeyMismatch);
 		}
 
-		let to_sign = Sha256::digest(info.hash());
+		let to_ed25519_sign = info.hash();
+		let to_hpk_sign =
+			Sha256::digest([to_ed25519_sign.as_slice(), wi.roster_sig.as_bytes()].concat());
 
-		if !inviter.kp.svk.verify(&to_sign, &wi.sig) {
+		if !(inviter_identity.verify(&to_hpk_sign, &wi.identity_sig)
+			&& inviter.kp.svk.verify(&to_ed25519_sign, &wi.roster_sig))
+		{
 			return Err(Error::InvalidWelcomeSignature);
 		}
 
@@ -851,9 +858,10 @@ impl Group {
 			pending_updates: HashMap::new(),
 			pending_commits: HashMap::new(),
 			user_id: id.clone(),
-			ilum_dk: ilum_dk.clone(),
-			x448_dk: x448_dk.clone(),
-			ssk: ssk.clone(),
+			ilum_dk: prekey.kp.private.ilum.clone(),
+			x448_dk: prekey.kp.private.x448.clone(),
+			ssk: prekey.kp.private.ssk.clone(),
+			identity,
 			secrets,
 			description: info.description,
 		};
@@ -922,24 +930,30 @@ impl Group {
 	}
 
 	// TODO: return (com, kp, enc) and apply instead of state change?
-	fn rekey(&mut self, receivers: &[Member]) -> (CommitSecret, KeyPackage, hpkencrypt::Encrypted) {
+	fn rekey(
+		&mut self,
+		receivers: &[Member],
+	) -> (CommitSecret, key_package::PublicKey, hpkencrypt::Encrypted) {
 		let com_secret = rand::thread_rng().gen::<CommitSecret>();
-		let (kp, ilum_sk, x448_sk, ed25519_sk) = self.gen_kp();
+		let key_package::KeyPair {
+			private: key_package::PrivateKey { ilum, x448, ssk },
+			public,
+		} = self.gen_kp();
 
 		// should I return this instead? if yes, com_secret won't by encrypted for my new com_key, but I ignore it anyway
-		self.roster.set_kp(&self.user_id, &kp);
-		self.ilum_dk = ilum_sk;
-		self.x448_dk = x448_sk;
-		self.ssk = ed25519_sk;
+		self.roster.set_kp(&self.user_id, &public);
+		self.ilum_dk = ilum;
+		self.x448_dk = x448;
+		self.ssk = ssk;
 
 		let keys = receivers
 			.iter()
-			.map(|m| (m.kp.ilum_ek.clone(), m.kp.x448_ek.clone()))
+			.map(|m| (m.kp.ilum.clone(), m.kp.x448.clone()))
 			.collect::<Vec<(ilum::PublicKey, x448::PublicKey)>>();
 		// encrypt com_secret for all recipients including myself (though I'll ignore it when processing)
 		let encrypted = hpkencrypt::encrypt(&com_secret, &self.seed, &keys);
 
-		(com_secret, kp, encrypted)
+		(com_secret, public, encrypted)
 	}
 
 	// generates a new state { epoch + 1, roster, roster_hash }, returns diff
@@ -1102,8 +1116,8 @@ impl Group {
 mod tests {
 	use super::{Error, Group, Owner};
 	use crate::{
-		ciphertext::ContentType, commit::FramedCommit, ed25519, key_package::KeyPackage, msg::Msg,
-		nid::Nid, proposal::FramedProposal, x448,
+		ciphertext::ContentType, commit::FramedCommit, hpksign, key_package, msg::Msg, nid::Nid,
+		prekey, proposal::FramedProposal,
 	};
 
 	#[test]
@@ -1130,38 +1144,26 @@ mod tests {
 	#[test]
 	fn test_create_add_group() {
 		let seed = [12u8; 16];
-		let alice_ekp = ilum::gen_keypair(&seed);
-		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = ed25519::KeyPair::generate();
+		let alice_identity = hpksign::KeyPair::generate();
+		let alice_kp = key_package::KeyPair::generate(&seed);
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
-			kp: KeyPackage::new(
-				&alice_ekp.pk,
-				&alice_x448_kp.public,
-				&alice_skp.public,
-				&alice_skp.private,
-			),
-			ilum_dk: alice_ekp.sk,
-			x448_dk: alice_x448_kp.private,
-			ssk: alice_skp.private,
+			kp: alice_kp,
+			identity: alice_identity.private,
 		};
 
 		let mut alice_group = Group::create(seed, alice);
 
 		let bob_id = Nid::new(b"bobbobbo", 0);
-		let bob_user_ekp = ilum::gen_keypair(&seed);
-		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = ed25519::KeyPair::generate();
-		let bob_user_kp = KeyPackage::new(
-			&bob_user_ekp.pk,
-			&bob_x448_kp.public,
-			&bob_user_skp.public,
-			&bob_user_skp.private,
-		);
-		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_id, bob_user_kp.clone())
-			.unwrap();
+		let bob_identity = hpksign::KeyPair::generate();
+		let bob_prekey = prekey::KeyPair::generate(&seed, &bob_identity.private);
+		let bob_pk = prekey::PublicKey {
+			kp: bob_prekey.kp.public.clone(),
+			identity: bob_identity.public.clone(),
+			sig: bob_prekey.sig.clone(),
+		};
+		let (add_bob_prop, _) = alice_group.propose_add(bob_id, bob_pk).unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
 		// alice invites using her initial group
@@ -1186,10 +1188,9 @@ mod tests {
 		// bob joins
 		let mut bob_group = Group::join(
 			&bob_id,
-			&bob_user_kp,
-			&bob_user_ekp.sk,
-			&bob_x448_kp.private,
-			&bob_user_skp.private,
+			bob_identity.private.clone(),
+			bob_prekey.clone(),
+			&alice_identity.public,
 			&seed,
 			&wlcms.clone().unwrap().0,
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
@@ -1222,19 +1223,15 @@ mod tests {
 		assert_eq!(alice_group.description, bob_group.description);
 
 		let charlie_id = Nid::new(b"charliec", 0);
-		let charlie_user_ekp = ilum::gen_keypair(&seed);
-		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = ed25519::KeyPair::generate();
-		let charlie_user_kp = KeyPackage::new(
-			&charlie_user_ekp.pk,
-			&charlie_x448_kp.public,
-			&charlie_user_skp.public,
-			&charlie_user_skp.private,
-		);
+		let charlie_identity = hpksign::KeyPair::generate();
+		let charlie_prekey = prekey::KeyPair::generate(&seed, &charlie_identity.private);
+		let charlie_pk = prekey::PublicKey {
+			kp: charlie_prekey.kp.public.clone(),
+			identity: charlie_identity.public,
+			sig: charlie_prekey.sig.clone(),
+		};
 		// bob proposes to add charlie
-		let (add_charlie_prop, _) = bob_group
-			.propose_add(charlie_id, charlie_user_kp.clone())
-			.unwrap();
+		let (add_charlie_prop, _) = bob_group.propose_add(charlie_id, charlie_pk).unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (update_bob_prop, _) = bob_group.propose_update();
 		// commits using his bob_group
@@ -1273,13 +1270,12 @@ mod tests {
 			)
 			.unwrap()
 			.unwrap();
-		// charlie joins
+		// charlie joins; bob commited, so his identity should be used, not alice
 		let mut charlie_group = Group::join(
 			&charlie_id,
-			&charlie_user_kp,
-			&charlie_user_ekp.sk,
-			&charlie_x448_kp.private,
-			&charlie_user_skp.private,
+			charlie_identity.private,
+			charlie_prekey.clone(),
+			&bob_identity.public,
 			&seed,
 			&wlcms.clone().unwrap().0,
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
@@ -1470,38 +1466,27 @@ mod tests {
 	#[test]
 	fn test_reuse_guard() {
 		let seed = [12u8; 16];
-		let alice_ekp = ilum::gen_keypair(&seed);
-		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = ed25519::KeyPair::generate();
+		let alice_identity = hpksign::KeyPair::generate();
+		let alice_kp = key_package::KeyPair::generate(&seed);
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
-			kp: KeyPackage::new(
-				&alice_ekp.pk,
-				&alice_x448_kp.public,
-				&alice_skp.public,
-				&alice_skp.private,
-			),
-			ilum_dk: alice_ekp.sk,
-			x448_dk: alice_x448_kp.private,
-			ssk: alice_skp.private,
+			kp: alice_kp,
+			identity: alice_identity.private,
 		};
 
 		let mut alice_group = Group::create(seed, alice);
 
-		let bob_user_id = Nid::new(b"bobbobbo", 0);
-		let bob_user_ekp = ilum::gen_keypair(&seed);
-		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = ed25519::KeyPair::generate();
-		let bob_user_kp = KeyPackage::new(
-			&bob_user_ekp.pk,
-			&bob_x448_kp.public,
-			&bob_user_skp.public,
-			&bob_user_skp.private,
-		);
-		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_user_id, bob_user_kp.clone())
-			.unwrap();
+		let bob_id = Nid::new(b"bobbobbo", 0);
+		let bob_identity = hpksign::KeyPair::generate();
+		let bob_prekey = prekey::KeyPair::generate(&seed, &bob_identity.private);
+		let bob_pk = prekey::PublicKey {
+			kp: bob_prekey.kp.public.clone(),
+			identity: bob_identity.public,
+			sig: bob_prekey.sig.clone(),
+		};
+
+		let (add_bob_prop, _) = alice_group.propose_add(bob_id, bob_pk).unwrap();
 		// alice invite using her initial group
 		let (fc, _, ctds, wlcms) = alice_group.commit(&[add_bob_prop.clone()]).unwrap();
 
@@ -1513,11 +1498,10 @@ mod tests {
 
 		// bob joins
 		let mut bob_group = Group::join(
-			&bob_user_id,
-			&bob_user_kp,
-			&bob_user_ekp.sk,
-			&bob_x448_kp.private,
-			&bob_user_skp.private,
+			&bob_id,
+			bob_identity.private,
+			bob_prekey.clone(),
+			&alice_identity.public,
 			&seed,
 			&wlcms.clone().unwrap().0,
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
@@ -1556,38 +1540,26 @@ mod tests {
 	#[test]
 	fn test_encrypt_decrypt() {
 		let seed = [12u8; 16];
-		let alice_ekp = ilum::gen_keypair(&seed);
-		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = ed25519::KeyPair::generate();
+		let alice_identity = hpksign::KeyPair::generate();
+		let alice_kp = key_package::KeyPair::generate(&seed);
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
-			kp: KeyPackage::new(
-				&alice_ekp.pk,
-				&alice_x448_kp.public,
-				&alice_skp.public,
-				&alice_skp.private,
-			),
-			ilum_dk: alice_ekp.sk,
-			x448_dk: alice_x448_kp.private,
-			ssk: alice_skp.private,
+			kp: alice_kp,
+			identity: alice_identity.private,
 		};
 
 		let mut alice_group = Group::create(seed, alice);
 
 		let bob_id = Nid::new(b"bobbobbo", 0);
-		let bob_user_ekp = ilum::gen_keypair(&seed);
-		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = ed25519::KeyPair::generate();
-		let bob_user_kp = KeyPackage::new(
-			&bob_user_ekp.pk,
-			&bob_x448_kp.public,
-			&bob_user_skp.public,
-			&bob_user_skp.private,
-		);
-		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_id, bob_user_kp.clone())
-			.unwrap();
+		let bob_identity = hpksign::KeyPair::generate();
+		let bob_prekey = prekey::KeyPair::generate(&seed, &bob_identity.private);
+		let bob_pk = prekey::PublicKey {
+			kp: bob_prekey.kp.public.clone(),
+			identity: bob_identity.public,
+			sig: bob_prekey.sig.clone(),
+		};
+		let (add_bob_prop, _) = alice_group.propose_add(bob_id, bob_pk).unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (edit_prop, _) = alice_group.propose_edit(b"v1").unwrap();
 		// alice invites using her initial group
@@ -1612,10 +1584,9 @@ mod tests {
 		// bob joins
 		let mut bob_group = Group::join(
 			&bob_id,
-			&bob_user_kp,
-			&bob_user_ekp.sk,
-			&bob_x448_kp.private,
-			&bob_user_skp.private,
+			bob_identity.private,
+			bob_prekey.clone(),
+			&alice_identity.public,
 			&seed,
 			&wlcms.clone().unwrap().0,
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
@@ -1648,38 +1619,26 @@ mod tests {
 	#[test]
 	fn test_process_someone_elses_commit() {
 		let seed = [12u8; 16];
-		let alice_ekp = ilum::gen_keypair(&seed);
-		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = ed25519::KeyPair::generate();
+		let alice_identity = hpksign::KeyPair::generate();
+		let alice_kp = key_package::KeyPair::generate(&seed);
 		let alice_id = Nid::new(b"aliceali", 0);
 		let alice = Owner {
 			id: alice_id.clone(),
-			kp: KeyPackage::new(
-				&alice_ekp.pk,
-				&alice_x448_kp.public,
-				&alice_skp.public,
-				&alice_skp.private,
-			),
-			ilum_dk: alice_ekp.sk,
-			x448_dk: alice_x448_kp.private,
-			ssk: alice_skp.private,
+			kp: alice_kp,
+			identity: alice_identity.private,
 		};
 
 		let mut alice_group = Group::create(seed, alice);
 
 		let bob_id = Nid::new(b"bobbobbo", 0);
-		let bob_user_ekp = ilum::gen_keypair(&seed);
-		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = ed25519::KeyPair::generate();
-		let bob_user_kp = KeyPackage::new(
-			&bob_user_ekp.pk,
-			&bob_x448_kp.public,
-			&bob_user_skp.public,
-			&bob_user_skp.private,
-		);
-		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_id, bob_user_kp.clone())
-			.unwrap();
+		let bob_identity = hpksign::KeyPair::generate();
+		let bob_prekey = prekey::KeyPair::generate(&seed, &bob_identity.private);
+		let bob_pk = prekey::PublicKey {
+			kp: bob_prekey.kp.public.clone(),
+			identity: bob_identity.public,
+			sig: bob_prekey.sig.clone(),
+		};
+		let (add_bob_prop, _) = alice_group.propose_add(bob_id, bob_pk).unwrap();
 		// alice invite using her initial group
 		let (fc, _, ctds, wlcms) = alice_group.commit(&[add_bob_prop.clone()]).unwrap();
 
@@ -1692,10 +1651,9 @@ mod tests {
 		// bob joins
 		let mut bob_group = Group::join(
 			&bob_id,
-			&bob_user_kp,
-			&bob_user_ekp.sk,
-			&bob_x448_kp.private,
-			&bob_user_skp.private,
+			bob_identity.private,
+			bob_prekey.clone(),
+			&alice_identity.public,
 			&seed,
 			&wlcms.clone().unwrap().0,
 			&wlcms.unwrap().1.get(0).unwrap().ctd,
@@ -1703,15 +1661,13 @@ mod tests {
 		.unwrap();
 
 		let charlie_id = Nid::new(b"charliec", 0);
-		let charlie_user_ekp = ilum::gen_keypair(&seed);
-		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = ed25519::KeyPair::generate();
-		let charlie_user_kp = KeyPackage::new(
-			&charlie_user_ekp.pk,
-			&charlie_x448_kp.public,
-			&charlie_user_skp.public,
-			&charlie_user_skp.private,
-		);
+		let charlie_identity = hpksign::KeyPair::generate();
+		let charlie_prekey = prekey::KeyPair::generate(&seed, &charlie_identity.private);
+		let charlie_pk = prekey::PublicKey {
+			kp: charlie_prekey.kp.public,
+			identity: charlie_identity.public,
+			sig: charlie_prekey.sig,
+		};
 		// keep alice's pk to ensure her ignored future proposal wont' change it
 		let alice_pk = alice_group
 			.roster
@@ -1720,9 +1676,7 @@ mod tests {
 			.clone();
 
 		// bob proposes to add charlie
-		let (add_charlie_prop, _) = bob_group
-			.propose_add(charlie_id, charlie_user_kp.clone())
-			.unwrap();
+		let (add_charlie_prop, _) = bob_group.propose_add(charlie_id, charlie_pk).unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		let (update_bob_prop, _) = bob_group.propose_update();
 

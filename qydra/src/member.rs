@@ -1,14 +1,14 @@
-use crate::{hash::Hashable, key_package::KeyPackage, nid::Nid};
+use crate::{hash::Hashable, key_package::PublicKey, nid::Nid};
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Member {
 	pub id: Nid,
-	pub kp: KeyPackage,
+	pub kp: PublicKey,
 	pub joined_at_epoch: u64,
 }
 
 impl Member {
-	pub fn new(id: Nid, kp: KeyPackage, joined_at_epoch: u64) -> Self {
+	pub fn new(id: Nid, kp: PublicKey, joined_at_epoch: u64) -> Self {
 		Self {
 			id,
 			kp,

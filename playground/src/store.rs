@@ -7,9 +7,11 @@ use async_trait::async_trait;
 use qydra::{
 	commit::FramedCommit,
 	group::Group,
+	hpksign,
 	id::{Id, Identifiable},
 	key_package,
 	nid::Nid,
+	prekey,
 	proposal::FramedProposal,
 	protocol::{self, Error},
 };
@@ -294,16 +296,24 @@ impl protocol::Storage for Store {
 			.clone())
 	}
 	// someone used my public keys to invite me
-	async fn get_my_prekey_bundle(&self, id: Id) -> Result<key_package::KeyBundle, Error> {
+	async fn get_my_prekey(&self, id: Id) -> Result<prekey::KeyPair, Error> {
 		todo!()
 	}
-	async fn delete_my_prekey_bundle(&self, id: Id) -> Result<(), Error> {
+	async fn delete_my_prekey(&self, id: Id) -> Result<(), Error> {
 		todo!()
 	}
 	// my static qydra identity used to create all groups
 	// TODO: introduce an ephemeral package signed witha static identity?
 	// TODO: should it accept my Nid?
-	async fn get_my_identity_key_bundle(&self) -> Result<key_package::KeyBundle, Error> {
+	async fn get_my_identity_keys(&self) -> Result<hpksign::PrivateKey, Error> {
+		todo!()
+	}
+
+	async fn get_identity_key(&self, nid: &Nid) -> Result<hpksign::PublicKey, Error> {
+		todo!()
+	}
+
+	async fn save_identity_key(&self, nid: &Nid, key: &hpksign::PublicKey) -> Result<(), Error> {
 		todo!()
 	}
 }

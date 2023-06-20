@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
 	hash::{Hash, Hashable},
-	key_package::KeyPackage,
+	key_package::PublicKey,
 	member::Member,
 	nid::Nid,
 };
@@ -63,7 +63,7 @@ impl Roster {
 	}
 
 	// sets kp for id and returns prev_kp, if any, or nil
-	pub fn set_kp(&mut self, id: &Nid, kp: &KeyPackage) {
+	pub fn set_kp(&mut self, id: &Nid, kp: &PublicKey) {
 		self.members.entry(*id).and_modify(|m| {
 			m.kp = kp.clone();
 		});
@@ -106,9 +106,9 @@ impl Hashable for Roster {
 mod tests {
 	use super::Roster;
 	use crate::{
-		ed25519::{PublicKey, Signature, KeyPair},
+		ed25519::{KeyPair, PublicKey, Signature},
 		hash::Hashable,
-		key_package::KeyPackage,
+		key_package,
 		member::Member,
 		nid::Nid,
 		x448,
@@ -118,9 +118,9 @@ mod tests {
 	fn test_from_member() {
 		let r = Roster::from(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -138,9 +138,9 @@ mod tests {
 		assert!(roster
 			.add(Member::new(
 				Nid::new(b"abcdefgh", 0),
-				KeyPackage {
-					ilum_ek: [34u8; 768],
-					x448_ek: x448::PublicKey::from(&[1u8; 56]),
+				key_package::PublicKey {
+					ilum: [34u8; 768],
+					x448: x448::PublicKey::from(&[1u8; 56]),
 					svk: PublicKey::new([56u8; KeyPair::PUB]),
 					sig: Signature::new([78u8; Signature::SIZE]),
 				},
@@ -151,9 +151,9 @@ mod tests {
 		assert!(roster
 			.add(Member::new(
 				Nid::new(b"abcdefgh", 0),
-				KeyPackage {
-					ilum_ek: [56u8; 768],
-					x448_ek: x448::PublicKey::from(&[1u8; 56]),
+				key_package::PublicKey {
+					ilum: [56u8; 768],
+					x448: x448::PublicKey::from(&[1u8; 56]),
 					svk: PublicKey::new([78u8; KeyPair::PUB]),
 					sig: Signature::new([90u8; Signature::SIZE]),
 				},
@@ -166,9 +166,9 @@ mod tests {
 	fn test_remove() {
 		let mut roster = Roster::from(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -177,9 +177,9 @@ mod tests {
 
 		_ = roster.add(Member::new(
 			Nid::new(b"ijklmnop", 0),
-			KeyPackage {
-				ilum_ek: [22u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [22u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([33u8; KeyPair::PUB]),
 				sig: Signature::new([77u8; Signature::SIZE]),
 			},
@@ -211,9 +211,9 @@ mod tests {
 
 		_ = roster.add(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -225,9 +225,9 @@ mod tests {
 
 		_ = roster.add(Member::new(
 			Nid::new(b"abcdwxyz", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -245,9 +245,9 @@ mod tests {
 		// add two elements with keys 12 and 34 to r1
 		_ = r1.add(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -256,9 +256,9 @@ mod tests {
 
 		_ = r1.add(Member::new(
 			Nid::new(b"abcdwxyz", 0),
-			KeyPackage {
-				ilum_ek: [56u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [56u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([78u8; KeyPair::PUB]),
 				sig: Signature::new([90u8; Signature::SIZE]),
 			},
@@ -270,9 +270,9 @@ mod tests {
 		// add two elements with keys 23 and 12 to r2
 		_ = r2.add(Member::new(
 			Nid::new(b"abcdwxyz", 0),
-			KeyPackage {
-				ilum_ek: [56u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [56u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([78u8; KeyPair::PUB]),
 				sig: Signature::new([90u8; Signature::SIZE]),
 			},
@@ -281,9 +281,9 @@ mod tests {
 
 		_ = r2.add(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},
@@ -301,9 +301,9 @@ mod tests {
 
 		_ = r3.add(Member::new(
 			Nid::new(b"abcdwxyz", 0),
-			KeyPackage {
-				ilum_ek: [56u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [56u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([78u8; KeyPair::PUB]),
 				sig: Signature::new([90u8; Signature::SIZE]),
 			},
@@ -312,9 +312,9 @@ mod tests {
 
 		_ = r3.add(Member::new(
 			Nid::new(b"abcdefgh", 0),
-			KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::PublicKey::from(&[1u8; 56]),
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::PublicKey::from(&[1u8; 56]),
 				svk: PublicKey::new([56u8; KeyPair::PUB]),
 				sig: Signature::new([78u8; Signature::SIZE]),
 			},

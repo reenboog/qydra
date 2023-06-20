@@ -3,8 +3,8 @@ include!(concat!(env!("OUT_DIR"), "/qydra.rs"));
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-	aes_gcm, chain, chain_tree, ciphertext, commit, ed25519, group, hash, hpkencrypt, id,
-	key_package, key_schedule, member, nid, proposal, roster, secret_tree,
+	aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, ed25519, group, hash, hpkencrypt,
+	hpksign, id, key_package, key_schedule, member, nid, proposal, roster, secret_tree,
 	serializable::{Deserializable, Serializable},
 	transport, treemath, update, welcome,
 };
@@ -17,9 +17,13 @@ pub enum Error {
 	WrongX448KeySize,
 	WrongEd25519KeySize,
 	WrongEd25519SigSize,
+	WrongDilithiumKeySize,
+	WrongDilithiumSigSize,
 	WrongIdSize,
 	WrongNidSize,
 	BadKeyPackageFormat,
+	BadHpkSignPrivateKey,
+	BadHpkSignature,
 	BadMemberFormat,
 	BadRosterFormat,
 	WrongGuidSize,
@@ -352,6 +356,7 @@ impl From<&group::Group> for Group {
 			ilum_dk: val.ilum_dk().to_vec(),
 			x448_dk: val.x448_dk().as_bytes().to_vec(),
 			ssk: val.ssk().as_bytes().to_vec(),
+			identity: val.identity().into(),
 			secrets: val.secrets().into(),
 			description: val.description().to_vec(),
 		}
@@ -407,6 +412,9 @@ impl TryFrom<Group> for group::Group {
 			val.ilum_dk.try_into().or(Err(Error::WrongIlumKeySize))?,
 			val.x448_dk.try_into().or(Err(Error::WrongX448KeySize))?,
 			val.ssk.try_into().or(Err(Error::WrongEd25519KeySize))?,
+			val.identity
+				.try_into()
+				.or(Err(Error::BadHpkSignPrivateKey))?,
 			val.secrets
 				.try_into()
 				.or(Err(Error::BadEpochSecretsFormat))?,
@@ -472,38 +480,121 @@ impl Deserializable for commit::PendingCommit {
 	}
 }
 
-// KeyPackage
-impl From<&key_package::KeyPackage> for KeyPackage {
-	fn from(val: &key_package::KeyPackage) -> Self {
+// hpksign::Signature
+impl From<&hpksign::Signature> for HpkSignature {
+	fn from(val: &hpksign::Signature) -> Self {
 		Self {
-			ilum_ek: val.ilum_ek.to_vec(),
-			x448_ek: val.x448_ek.as_bytes().to_vec(),
+			ed25519: val.ed25519.as_bytes().to_vec(),
+			dilithium: val.dilithium.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for hpksign::Signature {
+	fn serialize(&self) -> Vec<u8> {
+		HpkSignature::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<HpkSignature> for hpksign::Signature {
+	type Error = Error;
+
+	fn try_from(val: HpkSignature) -> Result<Self, Self::Error> {
+		Ok(Self {
+			ed25519: ed25519::Signature::try_from(val.ed25519)
+				.or(Err(Error::WrongEd25519SigSize))?,
+			dilithium: dilithium::Signature::new(
+				val.dilithium
+					.try_into()
+					.or(Err(Error::WrongDilithiumSigSize))?,
+			),
+		})
+	}
+}
+
+impl Deserializable for hpksign::Signature {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(HpkSignature::decode(buf).or(Err(Error::BadHpkSignature))?)
+	}
+}
+
+// hpksign::PrivateKey
+impl From<&hpksign::PrivateKey> for HpkSignPrivateKey {
+	fn from(val: &hpksign::PrivateKey) -> Self {
+		Self {
+			ed25519: val.ed25519.as_bytes().to_vec(),
+			dilithium: val.dilithium.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for hpksign::PrivateKey {
+	fn serialize(&self) -> Vec<u8> {
+		HpkSignPrivateKey::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<HpkSignPrivateKey> for hpksign::PrivateKey {
+	type Error = Error;
+
+	fn try_from(val: HpkSignPrivateKey) -> Result<Self, Self::Error> {
+		Ok(Self {
+			ed25519: ed25519::PrivateKey::try_from(val.ed25519)
+				.or(Err(Error::WrongEd25519KeySize))?,
+			dilithium: dilithium::PrivateKey::try_from(val.dilithium)
+				.or(Err(Error::WrongDilithiumKeySize))?,
+		})
+	}
+}
+
+impl Deserializable for hpksign::PrivateKey {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(HpkSignPrivateKey::decode(buf).or(Err(Error::BadHpkSignPrivateKey))?)
+	}
+}
+
+// KeyPackage
+impl From<&key_package::PublicKey> for KeyPackage {
+	fn from(val: &key_package::PublicKey) -> Self {
+		Self {
+			ilum_ek: val.ilum.to_vec(),
+			x448_ek: val.x448.as_bytes().to_vec(),
 			svk: val.svk.as_bytes().to_vec(),
 			sig: val.sig.as_bytes().to_vec(),
 		}
 	}
 }
 
-impl Serializable for key_package::KeyPackage {
+impl Serializable for key_package::PublicKey {
 	fn serialize(&self) -> Vec<u8> {
 		KeyPackage::from(self).encode_to_vec()
 	}
 }
 
-impl TryFrom<KeyPackage> for key_package::KeyPackage {
+impl TryFrom<KeyPackage> for key_package::PublicKey {
 	type Error = Error;
 
 	fn try_from(val: KeyPackage) -> Result<Self, Self::Error> {
 		Ok(Self {
-			ilum_ek: val.ilum_ek.try_into().or(Err(Error::WrongIlumKeySize))?,
-			x448_ek: val.x448_ek.try_into().or(Err(Error::WrongX448KeySize))?,
+			ilum: val.ilum_ek.try_into().or(Err(Error::WrongIlumKeySize))?,
+			x448: val.x448_ek.try_into().or(Err(Error::WrongX448KeySize))?,
 			svk: ed25519::PublicKey::try_from(val.svk).or(Err(Error::WrongEd25519KeySize))?,
 			sig: ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
 		})
 	}
 }
 
-impl Deserializable for key_package::KeyPackage {
+impl Deserializable for key_package::PublicKey {
 	type Error = Error;
 
 	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
@@ -653,7 +744,8 @@ impl From<&welcome::WlcmCti> for WlcmCti {
 	fn from(val: &welcome::WlcmCti) -> Self {
 		Self {
 			cti: (&val.cti).into(),
-			sig: val.sig.as_bytes().to_vec(),
+			roster_sig: val.roster_sig.as_bytes().to_vec(),
+			identity_sig: (&val.identity_sig).into(),
 		}
 	}
 }
@@ -670,7 +762,14 @@ impl TryFrom<WlcmCti> for welcome::WlcmCti {
 	fn try_from(val: WlcmCti) -> Result<Self, Self::Error> {
 		Ok(Self {
 			cti: val.cti.try_into().or(Err(Error::BadCtiFormat))?,
-			sig: ed25519::Signature::new(val.sig.try_into().or(Err(Error::WrongEd25519SigSize))?),
+			roster_sig: val
+				.roster_sig
+				.try_into()
+				.or(Err(Error::WrongEd25519SigSize))?,
+			identity_sig: val
+				.identity_sig
+				.try_into()
+				.or(Err(Error::BadHpkSignature))?,
 		})
 	}
 }
@@ -1891,8 +1990,11 @@ impl Deserializable for transport::Received {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		aes_gcm, chain, chain_tree, ciphertext, commit, ed25519, group, hmac, hpkencrypt, id,
-		key_package, key_schedule, member, nid, proposal, reuse_guard, roster, secret_tree,
+		aes_gcm, chain, chain_tree, ciphertext, commit, dilithium, ed25519,
+		group::{self, Owner},
+		hmac, hpkencrypt, hpksign, id, key_package, key_schedule, member,
+		nid::{self, Nid},
+		prekey, proposal, reuse_guard, roster, secret_tree,
 		serializable::{Deserializable, Serializable},
 		transport, treemath, update, welcome, x448,
 	};
@@ -2042,37 +2144,27 @@ mod tests {
 	#[test]
 	fn test_group() {
 		let seed = [12u8; 16];
-		let alice_ekp = ilum::gen_keypair(&seed);
-		let alice_x448_kp = x448::KeyPair::generate();
-		let alice_skp = ed25519::KeyPair::generate();
-		let alice_id = nid::Nid::new(b"aliceali", 0);
-		let alice = group::Owner {
+		let alice_identity = hpksign::KeyPair::generate();
+		let alice_kp = key_package::KeyPair::generate(&seed);
+		let alice_id = Nid::new(b"aliceali", 0);
+		let alice = Owner {
 			id: alice_id.clone(),
-			kp: key_package::KeyPackage::new(
-				&alice_ekp.pk,
-				&alice_x448_kp.public,
-				&alice_skp.public,
-				&alice_skp.private,
-			),
-			ilum_dk: alice_ekp.sk,
-			x448_dk: alice_x448_kp.private,
-			ssk: alice_skp.private,
+			kp: alice_kp,
+			identity: alice_identity.private,
 		};
 
 		let mut alice_group = group::Group::create(seed, alice);
 
 		let bob_user_id = nid::Nid::new(b"bobbobbo", 0);
-		let bob_user_ekp = ilum::gen_keypair(&seed);
-		let bob_x448_kp = x448::KeyPair::generate();
-		let bob_user_skp = ed25519::KeyPair::generate();
-		let bob_user_kp = key_package::KeyPackage::new(
-			&bob_user_ekp.pk,
-			&bob_x448_kp.public,
-			&bob_user_skp.public,
-			&bob_user_skp.private,
-		);
+		let bob_identity = hpksign::KeyPair::generate();
+		let bob_prekey = prekey::KeyPair::generate(&seed, &bob_identity.private);
+		let bob_pk = prekey::PublicKey {
+			kp: bob_prekey.kp.public.clone(),
+			identity: bob_identity.public.clone(),
+			sig: bob_prekey.sig.clone(),
+		};
 		let (add_bob_prop, _) = alice_group
-			.propose_add(bob_user_id, bob_user_kp.clone())
+			.propose_add(bob_user_id, bob_pk.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		// alice invites using her initial group
@@ -2091,18 +2183,16 @@ mod tests {
 			.unwrap();
 
 		let charlie_user_id = nid::Nid::new(b"charliec", 0);
-		let charlie_user_ekp = ilum::gen_keypair(&seed);
-		let charlie_x448_kp = x448::KeyPair::generate();
-		let charlie_user_skp = ed25519::KeyPair::generate();
-		let charlie_user_kp = key_package::KeyPackage::new(
-			&charlie_user_ekp.pk,
-			&charlie_x448_kp.public,
-			&charlie_user_skp.public,
-			&charlie_user_skp.private,
-		);
+		let charlie_identity = hpksign::KeyPair::generate();
+		let charlie_prekey = prekey::KeyPair::generate(&seed, &charlie_identity.private);
+		let charlie_pk = prekey::PublicKey {
+			kp: charlie_prekey.kp.public.clone(),
+			identity: charlie_identity.public,
+			sig: charlie_prekey.sig.clone(),
+		};
 		// now alice proposes to add charlie
 		let (add_charlie_prop, _) = alice_group
-			.propose_add(charlie_user_id, charlie_user_kp.clone())
+			.propose_add(charlie_user_id, charlie_pk.clone())
 			.unwrap();
 		let (update_alice_prop, _) = alice_group.propose_update();
 		// commits using her alic_group
@@ -2123,9 +2213,9 @@ mod tests {
 		let x448_kp = x448::KeyPair::generate();
 		let s_kp = ed25519::KeyPair::generate();
 		let pack =
-			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
+			key_package::PublicKey::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let serialized = pack.serialize();
-		let deserialized = key_package::KeyPackage::deserialize(&serialized);
+		let deserialized = key_package::PublicKey::deserialize(&serialized);
 
 		assert_eq!(Ok(pack), deserialized);
 	}
@@ -2137,7 +2227,7 @@ mod tests {
 		let x448_kp = x448::KeyPair::generate();
 		let s_kp = ed25519::KeyPair::generate();
 		let pack =
-			key_package::KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
+			key_package::PublicKey::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let member = member::Member::new(nid::Nid::new(b"abcdefgh", 0), pack, 7);
 		let serialized = member.serialize();
 		let deserialized = member::Member::deserialize(&serialized);
@@ -2151,9 +2241,9 @@ mod tests {
 
 		_ = r.add(member::Member::new(
 			nid::Nid::new(b"abcdefgh", 0),
-			key_package::KeyPackage {
-				ilum_ek: [34u8; 768],
-				x448_ek: x448::KeyPair::generate().public,
+			key_package::PublicKey {
+				ilum: [34u8; 768],
+				x448: x448::KeyPair::generate().public,
 				svk: ed25519::PublicKey::new([56u8; ed25519::KeyPair::PUB]),
 				sig: ed25519::Signature::new([78u8; ed25519::Signature::SIZE]),
 			},
@@ -2162,9 +2252,9 @@ mod tests {
 
 		_ = r.add(member::Member::new(
 			nid::Nid::new(b"ijklmnop", 0),
-			key_package::KeyPackage {
-				ilum_ek: [56u8; 768],
-				x448_ek: x448::KeyPair::generate().public,
+			key_package::PublicKey {
+				ilum: [56u8; 768],
+				x448: x448::KeyPair::generate().public,
 				svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
 				sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 			},
@@ -2173,9 +2263,9 @@ mod tests {
 
 		_ = r.add(member::Member::new(
 			nid::Nid::new(b"qrstuvwx", 0),
-			key_package::KeyPackage {
-				ilum_ek: [78u8; 768],
-				x448_ek: x448::KeyPair::generate().public,
+			key_package::PublicKey {
+				ilum: [78u8; 768],
+				x448: x448::KeyPair::generate().public,
 				svk: ed25519::PublicKey::new([90u8; ed25519::KeyPair::PUB]),
 				sig: ed25519::Signature::new([12u8; ed25519::Signature::SIZE]),
 			},
@@ -2192,9 +2282,9 @@ mod tests {
 	fn test_proposal() {
 		use proposal::Proposal;
 
-		let kp = key_package::KeyPackage {
-			ilum_ek: [56u8; 768],
-			x448_ek: x448::KeyPair::generate().public,
+		let kp = key_package::PublicKey {
+			ilum: [56u8; 768],
+			x448: x448::KeyPair::generate().public,
 			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
 			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
@@ -2227,9 +2317,9 @@ mod tests {
 	fn test_framed_proposal() {
 		use proposal::Proposal;
 
-		let kp = key_package::KeyPackage {
-			ilum_ek: [56u8; 768],
-			x448_ek: x448::KeyPair::generate().public,
+		let kp = key_package::PublicKey {
+			ilum: [56u8; 768],
+			x448: x448::KeyPair::generate().public,
 			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
 			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
@@ -2284,7 +2374,14 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
+		let wcti = welcome::WlcmCti::new(
+			cti,
+			ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+			hpksign::Signature {
+				ed25519: ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+				dilithium: dilithium::Signature::new([53u8; dilithium::Signature::SIZE]),
+			},
+		);
 		let serialized = wcti.serialize();
 		let deserialized = welcome::WlcmCti::deserialize(&serialized);
 
@@ -2433,7 +2530,14 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
+		let wcti = welcome::WlcmCti::new(
+			cti,
+			ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+			hpksign::Signature {
+				ed25519: ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+				dilithium: dilithium::Signature::new([53u8; dilithium::Signature::SIZE]),
+			},
+		);
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
 		let si = transport::SendInvite {
@@ -2629,7 +2733,14 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let wcti = welcome::WlcmCti::new(cmpd_cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
+		let wcti = welcome::WlcmCti::new(
+			cmpd_cti,
+			ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+			hpksign::Signature {
+				ed25519: ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+				dilithium: dilithium::Signature::new([53u8; dilithium::Signature::SIZE]),
+			},
+		);
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wctd = welcome::WlcmCtd::new(nid::Nid::new(b"abcdefgh", 1), id::Id([22u8; 32]), ctd);
 		let si = transport::SendInvite {
@@ -2696,9 +2807,9 @@ mod tests {
 
 	#[test]
 	fn test_commit() {
-		let kp = key_package::KeyPackage {
-			ilum_ek: [56u8; 768],
-			x448_ek: x448::KeyPair::generate().public,
+		let kp = key_package::PublicKey {
+			ilum: [56u8; 768],
+			x448: x448::KeyPair::generate().public,
 			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
 			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
@@ -2721,9 +2832,9 @@ mod tests {
 
 	#[test]
 	fn test_framed_commit() {
-		let kp = key_package::KeyPackage {
-			ilum_ek: [56u8; 768],
-			x448_ek: x448::KeyPair::generate().public,
+		let kp = key_package::PublicKey {
+			ilum: [56u8; 768],
+			x448: x448::KeyPair::generate().public,
 			svk: ed25519::PublicKey::new([78u8; ed25519::KeyPair::PUB]),
 			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
 		};
@@ -2806,10 +2917,17 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let cti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
+		let wcti = welcome::WlcmCti::new(
+			cti,
+			ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+			hpksign::Signature {
+				ed25519: ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+				dilithium: dilithium::Signature::new([53u8; dilithium::Signature::SIZE]),
+			},
+		);
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wlcm = transport::ReceivedWelcome {
-			cti,
+			cti: wcti,
 			ctd,
 			kp_id: id::Id([88u8; 32]),
 		};
@@ -3001,10 +3119,17 @@ mod tests {
 			aes_gcm::Iv([45u8; 12]),
 			[123u8; 704],
 		);
-		let cti = welcome::WlcmCti::new(cti, ed25519::Signature::new([57u8; ed25519::Signature::SIZE]));
+		let wcti = welcome::WlcmCti::new(
+			cti,
+			ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+			hpksign::Signature {
+				ed25519: ed25519::Signature::new([57u8; ed25519::Signature::SIZE]),
+				dilithium: dilithium::Signature::new([53u8; dilithium::Signature::SIZE]),
+			},
+		);
 		let ctd = hpkencrypt::CmpdCtd::new([11u8; 48], vec![1, 2, 3]);
 		let wlcm = transport::ReceivedWelcome {
-			cti,
+			cti: wcti,
 			ctd,
 			kp_id: id::Id([88u8; 32]),
 		};

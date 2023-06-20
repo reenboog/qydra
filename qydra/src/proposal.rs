@@ -3,15 +3,15 @@ use crate::{
 	hash::{Hash, Hashable},
 	hmac::Digest,
 	id::{Id, Identifiable},
-	key_package::KeyPackage,
+	key_package::PublicKey,
 	nid::Nid,
 };
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Proposal {
 	Remove { id: Nid },
-	Update { kp: KeyPackage },
-	Add { id: Nid, kp: KeyPackage }, // FIXME: Prekey instead?
+	Update { kp: PublicKey },
+	Add { id: Nid, kp: PublicKey },
 	Edit { description: Vec<u8> },
 }
 

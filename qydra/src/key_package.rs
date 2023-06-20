@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	ed25519::{self, Signature},
-	hash::Hashable,
+	hash::{self, Hashable},
 	id::{Id, Identifiable},
 	x448,
 };
@@ -10,38 +10,23 @@ use crate::{
 // no life time is specified; by default, such keys are non expiring
 // no key scheme is specifid; a predefined set of keys is used instead
 
-// a public keys package signed with a ecc (to be implemented)
+// a public key package signed with an ecc-svk; used by the protocol internally
 #[derive(Clone, PartialEq, Debug)]
-pub struct KeyPackage {
-	pub ilum_ek: ilum::PublicKey,
-	pub x448_ek: x448::PublicKey,
+pub struct PublicKey {
+	pub ilum: ilum::PublicKey,
+	pub x448: x448::PublicKey,
 	pub svk: ed25519::PublicKey,
 	pub sig: ed25519::Signature,
 }
 
-struct IdentityKey {
-	// pub ed25519: ed448::PublicKey,
-	// pub dilithium: dilithium::PublicKey,
+#[derive(Clone, PartialEq, Debug)]
+pub struct PrivateKey {
+	pub ilum: ilum::SecretKey,
+	pub x448: x448::PrivateKey,
+	pub ssk: ed25519::PrivateKey,
 }
 
-// a KeyPackage signed with a static identity
-// struct PreKey {
-// 	kp: KeyPackage,
-// 	// signs (kp.sig + kp.hash())
-// 	sig: dilithium::Signature,
-// }
-
-// impl PreKey {
-// 	// init keys are signed with an identity (never changes) dilithium key
-// 	fn generate(ilum_seed: &ilum::Seed, identity_ssk: &dilithium::PrivateKey) -> Self {
-// 		Self {
-// 			kp: todo!(),
-// 			sig: todo!(),
-// 		}
-// 	}
-// }
-
-impl KeyPackage {
+impl PublicKey {
 	pub fn new(
 		ilum_ek: &ilum::PublicKey,
 		x448_ek: &x448::PublicKey,
@@ -49,17 +34,17 @@ impl KeyPackage {
 		ssk: &ed25519::PrivateKey,
 	) -> Self {
 		Self {
-			ilum_ek: ilum_ek.clone(),
-			x448_ek: x448_ek.clone(),
+			ilum: ilum_ek.clone(),
+			x448: x448_ek.clone(),
 			svk: svk.clone(),
 			sig: sign(ilum_ek, x448_ek, svk, ssk),
 		}
 	}
 }
 
-impl KeyPackage {
+impl PublicKey {
 	pub fn verify(&self) -> bool {
-		verify(&self.ilum_ek, &self.x448_ek, &self.svk, &self.sig)
+		verify(&self.ilum, &self.x448, &self.svk, &self.sig)
 	}
 }
 
@@ -69,41 +54,31 @@ pub fn sign(
 	svk: &ed25519::PublicKey,
 	ssk: &ed25519::PrivateKey,
 ) -> Signature {
-	let bytes = Sha256::digest(pack(ilum_ek, x448_ek, svk));
+	let bytes = hpack(ilum_ek, x448_ek, svk);
 
 	ssk.sign(&bytes)
 }
 
-// private keys + public KeyPackage
-pub struct KeyBundle {
-	pub ilum_dk: ilum::SecretKey,
-	pub ilum_ek: ilum::PublicKey,
-	pub x448_dk: x448::PrivateKey,
-	pub x448_ek: x448::PublicKey,
-	pub ssk: ed25519::PrivateKey,
-	pub svk: ed25519::PublicKey,
-	pub sig: ed25519::Signature,
+#[derive(Clone, PartialEq, Debug)]
+pub struct KeyPair {
+	pub private: PrivateKey,
+	pub public: PublicKey,
 }
 
-impl KeyBundle {
+impl KeyPair {
 	pub fn generate(ilum_seed: &ilum::Seed) -> Self {
-		let ssk = ed25519::KeyPair::generate();
-
-		Self::generate_with_ssk(ilum_seed, ssk)
-	}
-
-	pub fn generate_with_ssk(ilum_seed: &ilum::Seed, ssk: ed25519::KeyPair) -> Self {
 		let ilum = ilum::gen_keypair(ilum_seed);
 		let x448 = x448::KeyPair::generate();
-		let kp = KeyPackage::new(&ilum.pk, &x448.public, &ssk.public, &ssk.private);
+		let ed25519 = ed25519::KeyPair::generate();
+		let public = PublicKey::new(&ilum.pk, &x448.public, &ed25519.public, &ed25519.private);
+
 		Self {
-			ilum_dk: ilum.sk,
-			ilum_ek: ilum.pk,
-			x448_dk: x448.private,
-			x448_ek: x448.public,
-			ssk: ssk.private,
-			svk: ssk.public,
-			sig: kp.sig,
+			private: PrivateKey {
+				ilum: ilum.sk,
+				x448: x448.private,
+				ssk: ed25519.private,
+			},
+			public,
 		}
 	}
 }
@@ -114,21 +89,32 @@ pub fn verify(
 	svk: &ed25519::PublicKey,
 	sig: &Signature,
 ) -> bool {
-	let bytes = Sha256::digest(pack(ilum_ek, x448_ek, svk));
+	let bytes = hpack(ilum_ek, x448_ek, svk);
 
 	svk.verify(&bytes, sig)
 }
 
-fn pack(ilum_ek: &ilum::PublicKey, x448_ek: &x448::PublicKey, svk: &ed25519::PublicKey) -> Vec<u8> {
-	[ilum_ek.as_slice(), x448_ek.as_bytes(), svk.as_bytes()].concat()
+// pack and hash
+fn hpack(
+	ilum_ek: &ilum::PublicKey,
+	x448_ek: &x448::PublicKey,
+	svk: &ed25519::PublicKey,
+) -> Vec<u8> {
+	Sha256::digest([ilum_ek.as_slice(), x448_ek.as_bytes(), svk.as_bytes()].concat()).to_vec()
 }
 
-impl Hashable for KeyPackage {
-	fn hash(&self) -> crate::hash::Hash {
+impl Hashable for KeyPair {
+	fn hash(&self) -> hash::Hash {
+		self.public.hash()
+	}
+}
+
+impl Hashable for PublicKey {
+	fn hash(&self) -> hash::Hash {
 		Sha256::digest(
 			[
-				self.ilum_ek.as_slice(),
-				self.x448_ek.as_bytes(),
+				self.ilum.as_slice(),
+				self.x448.as_bytes(),
 				self.svk.as_bytes(),
 				self.sig.as_bytes(),
 			]
@@ -138,7 +124,13 @@ impl Hashable for KeyPackage {
 	}
 }
 
-impl Identifiable for KeyPackage {
+impl Identifiable for KeyPair {
+	fn id(&self) -> Id {
+		self.public.id()
+	}
+}
+
+impl Identifiable for PublicKey {
 	fn id(&self) -> Id {
 		Id(self.hash())
 	}
@@ -146,7 +138,7 @@ impl Identifiable for KeyPackage {
 
 #[cfg(test)]
 mod tests {
-	use super::KeyPackage;
+	use super::PublicKey;
 	use crate::{
 		ed25519::{self, Signature},
 		hash::{Hash, Hashable},
@@ -161,7 +153,7 @@ mod tests {
 		let e_kp = ilum::gen_keypair(seed);
 		let x448_kp = x448::KeyPair::generate();
 		let s_kp = ed25519::KeyPair::generate();
-		let pack = KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
+		let pack = PublicKey::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 
 		// verifies, when constructed properly
 		assert!(pack.verify());
@@ -180,12 +172,12 @@ mod tests {
 		let e_kp = ilum::gen_keypair(seed);
 		let x448_kp = x448::KeyPair::generate();
 		let s_kp = ed25519::KeyPair::generate();
-		let pack = KeyPackage::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
+		let pack = PublicKey::new(&e_kp.pk, &x448_kp.public, &s_kp.public, &s_kp.private);
 		let hash = pack.hash().to_vec();
 		let target_hash: Hash = Sha256::digest(
 			[
-				pack.ilum_ek.as_slice(),
-				pack.x448_ek.as_bytes(),
+				pack.ilum.as_slice(),
+				pack.x448.as_bytes(),
 				pack.svk.as_bytes(),
 				pack.sig.as_bytes(),
 			]

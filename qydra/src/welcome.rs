@@ -1,7 +1,7 @@
 use crate::{
-	ed25519::Signature,
+	ed25519,
 	hash::{Hash, Hashable},
-	hmac, hpkencrypt,
+	hmac, hpkencrypt, hpksign,
 	id::Id,
 	key_schedule::JoinerSecret,
 	nid::Nid,
@@ -12,12 +12,23 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, PartialEq, Debug)]
 pub struct WlcmCti {
 	pub cti: hpkencrypt::CmpdCti,
-	pub sig: Signature,
+	// Info.hash() signed with the inviter's current ed25519 ssk
+	pub roster_sig: ed25519::Signature,
+	// hash(Info.hash() + ed25519_sig) signed with the inviter's identity keys
+	pub identity_sig: hpksign::Signature,
 }
 
 impl WlcmCti {
-	pub fn new(cti: hpkencrypt::CmpdCti, sig: Signature) -> Self {
-		Self { cti, sig }
+	pub fn new(
+		cti: hpkencrypt::CmpdCti,
+		roster_sig: ed25519::Signature,
+		identity_sig: hpksign::Signature,
+	) -> Self {
+		Self {
+			cti,
+			roster_sig,
+			identity_sig,
+		}
 	}
 }
 

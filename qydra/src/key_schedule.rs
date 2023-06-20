@@ -23,7 +23,7 @@ const MAX_KEYS_TO_SKIP: u32 = 1000;
 #[derive(Clone, PartialEq, Debug)]
 pub struct EpochSecrets {
 	pub init: InitSecret,
-	pub mac: MacSecret, // TODO: get rid of me
+	pub mac: MacSecret,
 
 	pub hs: ChainTree,
 	pub app: ChainTree,
