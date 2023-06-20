@@ -77,8 +77,14 @@ impl PublicKey {
 
 #[cfg(test)]
 mod tests {
+	use super::KeyPair;
+
 	#[test]
 	fn test_sign_verify() {
-		// TODO: implement
+		let kp = KeyPair::generate();
+		let msg = b"So, how`s the party, Boris?";
+		let sig = kp.private.sign(msg);
+
+		assert!(kp.public.verify(msg, &sig));
 	}
 }
