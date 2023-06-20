@@ -16,8 +16,8 @@ pub struct PrivateKey {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct KeyPair {
-	pub(crate) private: PrivateKey,
-	pub(crate) public: PublicKey,
+	pub private: PrivateKey,
+	pub public: PublicKey,
 }
 
 impl KeyPair {

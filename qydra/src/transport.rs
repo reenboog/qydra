@@ -1,6 +1,12 @@
 use crate::{
-	ciphertext::Ciphertext, commit::CommitCtd, hpkencrypt::CmpdCtd, id::Id, nid::Nid,
-	welcome::WlcmCtd, welcome::WlcmCti,
+	ciphertext::Ciphertext,
+	commit::CommitCtd,
+	hash,
+	hpkencrypt::CmpdCtd,
+	id::{Id, Identifiable},
+	nid::Nid,
+	welcome::WlcmCtd,
+	welcome::WlcmCti,
 };
 
 #[derive(PartialEq, Debug, Clone)]
@@ -116,4 +122,23 @@ pub enum Received {
 	Commit(ReceivedCommit),
 	Leave(Ciphertext),
 	Msg(Ciphertext),
+}
+
+impl Identifiable for Received {
+	fn id(&self) -> Id {
+		match self {
+			Received::Welcome(wlcm) => wlcm.cti.id(),
+			Received::Add(add) => add.commit.cti.content_id,
+			Received::Admit(admt) => admt.content_id,
+			Received::Remove(rmv) => rmv.cti.content_id,
+			Received::Edit(edit) => edit.commit.cti.content_id,
+			Received::Props(props) => props
+				.props
+				.first()
+				.map_or(Id(hash::empty()), |p| p.content_id),
+			Received::Commit(cmt) => cmt.cti.content_id,
+			Received::Leave(leave) => leave.content_id,
+			Received::Msg(msg) => msg.content_id,
+		}
+	}
 }

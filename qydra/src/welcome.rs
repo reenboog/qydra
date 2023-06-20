@@ -2,7 +2,7 @@ use crate::{
 	ed25519,
 	hash::{Hash, Hashable},
 	hmac, hpkencrypt, hpksign,
-	id::Id,
+	id::{Id, Identifiable},
 	key_schedule::JoinerSecret,
 	nid::Nid,
 	roster::Roster,
@@ -29,6 +29,13 @@ impl WlcmCti {
 			roster_sig,
 			identity_sig,
 		}
+	}
+}
+
+impl Identifiable for WlcmCti {
+	fn id(&self) -> Id {
+		// unique content + unique ssk = unique ids
+		Id(Sha256::digest(self.roster_sig.as_bytes()).into())
 	}
 }
 

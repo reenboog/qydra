@@ -134,6 +134,7 @@ pub enum Error {
 		guid: Id,
 		ctx: String,
 	},
+	AlreadyProcessed(Id),
 	// one of handle_* methods triggered a transport::Send for sending
 	NeedsAction(transport::Send),
 	OutdatedProp {
@@ -211,8 +212,8 @@ pub struct OnHandle {
 pub trait Storage {
 	// TODO: all save_ functions should check for duplicates
 	// a log of message ids should be stored locally to ensure no duplicate is processed twice
-	async fn should_process_rcvd(&self, id: Id) -> bool;
-	async fn mark_rcvd_as_processed(&self, id: Id);
+	async fn should_process_rcvd(&self, id: Id) -> Result<bool, Error>;
+	async fn mark_rcvd_as_processed(&self, id: Id) -> Result<(), Error>;
 
 	// TODO: could it be sufficient to represent user identity as a signing key?
 	async fn save_group(
@@ -286,7 +287,7 @@ pub trait Storage {
 	async fn delete_my_prekey(&self, id: Id) -> Result<(), Error>;
 
 	// TODO: introduce topup
-	async fn get_my_identity_keys(&self) -> Result<hpksign::PrivateKey, Error>;
+	async fn get_my_identity_key(&self) -> Result<hpksign::PrivateKey, Error>;
 	async fn get_identity_key(&self, nid: &Nid) -> Result<hpksign::PublicKey, Error>;
 	async fn save_identity_key(&self, nid: &Nid, key: &hpksign::PublicKey) -> Result<(), Error>;
 }
@@ -337,7 +338,7 @@ where
 		}?;
 
 		let prekey = self.storage.get_my_prekey(wlcm.kp_id).await?;
-		let my_identity = self.storage.get_my_identity_keys().await?;
+		let my_identity = self.storage.get_my_identity_key().await?;
 
 		// TODO: check whether the sender can invite me?
 		let group = Group::join(
@@ -1602,60 +1603,68 @@ where
 	) -> Result<Option<transport::Send>, Error> {
 		use transport::Received::*;
 
-		// FIXME: mark Received as processed at some point
-		// ignore already processed messages
-		// TODO: if sender is pending_remove, ignore or throw?
-		// TODO: if pending_leave(guid) ignore except for ReceivedLeave & Remove or should I really care?
+		let id = rcvd.id();
 
-		match rcvd {
-			Welcome(w) => {
-				self.handle_welcome(w, sender, receiver).await?;
+		if self.storage.should_process_rcvd(id).await? {
+			// TODO: if sender is pending_remove, ignore or throw?
+			// TODO: if pending_leave(guid) ignore except for ReceivedLeave & Remove or should I really care?
 
-				Ok(None)
-			}
-			Add(a) => {
-				self.handle_add(a, sender, receiver).await?;
+			// FIXME: now, return proper result from each handle_*
 
-				Ok(None)
-			}
-			Admit(a) => {
-				self.handle_admit(a, sender, receiver).await?;
+			let res = match rcvd {
+				Welcome(w) => {
+					self.handle_welcome(w, sender, receiver).await?;
 
-				Ok(None)
-			}
-			Remove(r) => {
-				self.handle_remove(sender, r, receiver).await?;
+					Ok(None)
+				}
+				Add(a) => {
+					self.handle_add(a, sender, receiver).await?;
 
-				Ok(None)
-			}
-			Edit(e) => {
-				self.handle_edit(e, sender, receiver).await?;
+					Ok(None)
+				}
+				Admit(a) => {
+					self.handle_admit(a, sender, receiver).await?;
 
-				Ok(None)
-			}
-			Props(p) => {
-				self.handle_props(p, sender, receiver).await?;
+					Ok(None)
+				}
+				Remove(r) => {
+					self.handle_remove(sender, r, receiver).await?;
 
-				Ok(None)
-			}
-			Commit(c) => {
-				self.handle_commit(c, sender, receiver).await?;
+					Ok(None)
+				}
+				Edit(e) => {
+					self.handle_edit(e, sender, receiver).await?;
 
-				Ok(None)
-			}
-			Leave(l) => {
-				self.handle_leave(l, sender, receiver).await?;
+					Ok(None)
+				}
+				Props(p) => {
+					self.handle_props(p, sender, receiver).await?;
 
-				Ok(None)
-			}
-			Msg(m) => {
-				self.handle_msg(m, sender, receiver).await?;
+					Ok(None)
+				}
+				Commit(c) => {
+					self.handle_commit(c, sender, receiver).await?;
 
-				Ok(None)
-			}
+					Ok(None)
+				}
+				Leave(l) => {
+					self.handle_leave(l, sender, receiver).await?;
+
+					Ok(None)
+				}
+				Msg(m) => {
+					self.handle_msg(m, sender, receiver).await?;
+
+					Ok(None)
+				}
+			};
+
+			self.storage.mark_rcvd_as_processed(id).await?;
+
+			res
+		} else {
+			Err(Error::AlreadyProcessed(id))
 		}
-
-		// mark as processed
 	}
 
 	// invitees should NOT contain the group owner, or the process will fail upon proposing
@@ -1670,7 +1679,7 @@ where
 		if invitees.is_empty() {
 			Err(Error::NoEmptyGroupsAllowed)
 		} else {
-			let identity = self.storage.get_my_identity_keys().await?;
+			let identity = self.storage.get_my_identity_key().await?;
 			let kp = key_package::KeyPair::generate(ILUM_SEED);
 			let owner = Owner {
 				id: owner_id,

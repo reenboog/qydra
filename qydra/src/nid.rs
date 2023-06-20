@@ -2,7 +2,7 @@ pub type Cid = [u8; 8];
 
 // basically, 9 bytes is enough to encode cid + device_id (u8 for device_id which gives 255 devices)
 // do I actually need all this here? the protocol is not concerned with cids at all – just nids
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Hash, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Nid {
 	id: Cid,  // eg 192FF6B2
 	node: u8, // 1-255
