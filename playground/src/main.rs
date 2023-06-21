@@ -1,4 +1,4 @@
-pub mod store;
+pub mod mem_store;
 
 fn main() {
 	println!("wow!");

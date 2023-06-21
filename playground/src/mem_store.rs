@@ -16,7 +16,8 @@ use qydra::{
 };
 use tokio::sync::Mutex;
 
-pub struct Store {
+// a basic storage to keep stuf in memory
+pub struct MemStore {
 	groups: Arc<Mutex<HashMap<Id, BTreeMap<u64, Group>>>>,
 	nids: Arc<Mutex<Vec<Nid>>>,
 	// (prop, parent_commit)
@@ -36,7 +37,7 @@ pub struct Store {
 	locked: bool,
 }
 
-impl Store {
+impl MemStore {
 	pub fn new(prekeys: HashMap<Id, prekey::KeyPair>, identity: hpksign::KeyPair) -> Self {
 		Self {
 			groups: Arc::new(Mutex::new(HashMap::new())),
@@ -58,14 +59,14 @@ impl Store {
 	}
 }
 
-impl Store {
+impl MemStore {
 	pub fn lock(&mut self, locked: bool) {
 		self.locked = locked;
 	}
 }
 
 #[async_trait]
-impl protocol::Storage for Store {
+impl protocol::Storage for MemStore {
 	async fn should_process_rcvd(&self, id: Id) -> Result<bool, Error> {
 		if self.locked {
 			Err(Error::DbLocked)
@@ -475,7 +476,7 @@ impl protocol::Storage for Store {
 
 #[cfg(test)]
 mod tests {
-	use super::Store;
+	use super::MemStore;
 	use qydra::{
 		ed25519,
 		group::{Group, Owner},
@@ -491,7 +492,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_lock_unlock() -> Result<(), Error> {
-		let mut store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let mut store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 
 		store.lock(true);
 		// this one should fail, since store is locked
@@ -512,7 +513,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_get_set_remove_nids_for_nid() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 
 		store
 			.save_nids(&vec![Nid::new(b"abcdefgh", 0), Nid::new(b"abcdefgh", 1)])
@@ -562,7 +563,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_should_process_rcvd() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 		let id = Id([1u8; 32]);
 
 		assert_eq!(store.should_process_rcvd(id).await, Ok(true));
@@ -576,7 +577,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_save_get_delete_props() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 
 		let group_a = Id([1u8; 32]);
 		let group_b = Id([2u8; 32]);
@@ -675,7 +676,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_inc_sent_msg_count() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 		let guid = Id([12u8; 32]);
 
 		assert_eq!(store.inc_sent_msg_count(guid, 0).await, Ok(0));
@@ -692,7 +693,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_pending_admit() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 
 		let group_a = Id([11u8; 32]);
 		let group_b = Id([21u8; 32]);
@@ -729,7 +730,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_get_save_delete_group() -> Result<(), Error> {
-		let store = Store::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
 		let seed = [12u8; 16];
 		let alice_identity = hpksign::KeyPair::generate();
 		let alice_kp = key_package::KeyPair::generate(&seed);
