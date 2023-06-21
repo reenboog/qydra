@@ -114,9 +114,9 @@ pub struct Group {
 // a similar structure should be used for `me` in `Group`
 #[derive(Clone)]
 pub struct Owner {
-	pub(crate) id: Nid,
-	pub(crate) kp: key_package::KeyPair,
-	pub(crate) identity: hpksign::PrivateKey,
+	pub id: Nid,
+	pub kp: key_package::KeyPair,
+	pub identity: hpksign::PrivateKey,
 }
 
 impl Group {

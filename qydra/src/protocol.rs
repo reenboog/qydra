@@ -56,7 +56,7 @@ use crate::{
 pub const ILUM_SEED: &[u8; 16] =
 	b"\x96\x48\xb8\x08\x8b\x16\x1c\xf1\x22\xee\xb4\x5a\x29\x69\x02\x43";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
 	// the app is locked, retry later
 	DbLocked,
@@ -215,17 +215,6 @@ pub trait Storage {
 	async fn should_process_rcvd(&self, id: Id) -> Result<bool, Error>;
 	async fn mark_rcvd_as_processed(&self, id: Id) -> Result<(), Error>;
 
-	// TODO: could it be sufficient to represent user identity as a signing key?
-	async fn save_group(
-		&self,
-		group: &Group,
-		uid: &Id,
-		epoch: u64,
-		roster: Vec<&Nid>,
-	) -> Result<(), Error>;
-	// delete all epochs for this group, all framed commits, all pending_remove-s
-	async fn delete_group(&self, guid: Id) -> Result<(), Error>;
-
 	// gets all nids for the specified nid (including mine);
 	// useful in case a device is added/removed between the tasks
 	async fn get_nids_for_nid(&self, nid: Nid) -> Result<Vec<Nid>, Error>;
@@ -280,8 +269,18 @@ pub trait Storage {
 	) -> Result<(), Error>;
 	async fn is_pending_admit(&self, guid: Id) -> Result<bool, Error>;
 
+	async fn save_group(
+		&self,
+		group: &Group,
+		uid: &Id,
+		epoch: u64,
+		roster: Vec<Nid>,
+	) -> Result<(), Error>;
+	// delete all epochs for this group
+	async fn delete_group(&self, guid: Id) -> Result<(), Error>;
 	async fn get_group(&self, uid: &Id, epoch: u64) -> Result<Group, Error>;
-	async fn get_latest_epoch(&self, guid: Id) -> Result<Group, Error>;
+	async fn get_latest_epoch_for_group(&self, guid: Id) -> Result<Group, Error>;
+
 	// someone used my public keys to invite me
 	async fn get_my_prekey(&self, id: Id) -> Result<prekey::KeyPair, Error>;
 	async fn delete_my_prekey(&self, id: Id) -> Result<(), Error>;
@@ -353,7 +352,7 @@ where
 		.or(Err(Error::FailedToJoin))?;
 		let guid = group.uid();
 
-		match self.storage.get_latest_epoch(guid).await {
+		match self.storage.get_latest_epoch_for_group(guid).await {
 			// it's ok to receive a welcome to an existing group as long as we're not yet admitted
 			// AND the new group's epoch is larger than what's stored locally – just delete it, if any
 			Ok(existing_group) => {
@@ -442,7 +441,7 @@ where
 
 		let epoch = add.commit.cti.epoch;
 		let guid = add.commit.cti.guid;
-		let mut latest = self.storage.get_latest_epoch(guid).await?;
+		let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 
 		// this add might arrive after nid is added AND removed (almost impossible), but we're ok with that
 		// *-------------------------------->
@@ -675,7 +674,7 @@ where
 
 		let epoch = remove.cti.epoch;
 		let guid = remove.cti.guid;
-		let mut latest = self.storage.get_latest_epoch(guid).await?;
+		let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 
 		match epoch.cmp(&latest.epoch()) {
 			// an outdated epoch
@@ -884,7 +883,7 @@ where
 
 		let epoch = edit.commit.cti.epoch;
 		let guid = edit.commit.cti.guid;
-		let mut latest = self.storage.get_latest_epoch(guid).await?;
+		let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 
 		match epoch.cmp(&latest.epoch()) {
 			Less => {
@@ -1065,7 +1064,7 @@ where
 		// my props are already saved, so ignore them
 		if sender != receiver {
 			if let Some(guid) = props.props.first().map(|p| p.guid) {
-				let mut latest = self.storage.get_latest_epoch(guid).await?;
+				let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 				let epoch = latest.epoch();
 				// ensure all props are coming from the same epoch
 				let props = props
@@ -1119,7 +1118,7 @@ where
 
 		let guid = commit.cti.guid;
 		let epoch = commit.cti.epoch;
-		let mut latest = self.storage.get_latest_epoch(guid).await?;
+		let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 
 		match epoch.cmp(&latest.epoch()) {
 			// ignore regardles of the sender
@@ -1262,7 +1261,7 @@ where
 
 		let guid = ct.guid;
 		let epoch = ct.epoch;
-		let latest = self.storage.get_latest_epoch(guid).await?;
+		let latest = self.storage.get_latest_epoch_for_group(guid).await?;
 		// user could be already removed – just ignore, if that's a case
 		let user = latest
 			.roster()
@@ -1324,7 +1323,7 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let epoch = latest.epoch();
 			// remove pending removes, if any
 			let (removes_to_save, removes_to_send) = Self::propose_remove_if_any(
@@ -1396,7 +1395,7 @@ where
 			// c1, c2, c3
 			// h1, h2
 
-			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let epoch = latest.epoch();
 			// r: a0, a1, a2, b1, c1, c2, d1, d2, d3, e1, f1, g1
 			let roster = latest.roster().ids();
@@ -1500,7 +1499,7 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let ct = latest.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
 			let req_id = ct.content_id;
 			let farewell = SendMsg {
@@ -1533,7 +1532,7 @@ where
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
-			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let epoch = latest.epoch();
 			// r: a0, a1, a2, b1, c1, c2, d1, d2, d3, e1, f1, g1
 			// nids: a1, b1, g1
@@ -1752,7 +1751,7 @@ where
 			Err(Error::PendingAdmit { guid })
 		} else {
 			// TODO: respect access rules (eg `black lists`)
-			let mut latest = self.storage.get_latest_epoch(guid).await?;
+			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let ct = latest.encrypt(&Msg(pt.to_vec()), ContentType::Msg);
 			let roster = latest.roster().ids();
 			let epoch = latest.epoch();
@@ -1828,7 +1827,7 @@ where
 				&group,
 				&group.uid(),
 				group.epoch(),
-				roster.iter().map(|n| n).collect(),
+				roster.iter().map(|n| *n).collect(),
 			)
 			.await
 	}
