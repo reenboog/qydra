@@ -13,6 +13,7 @@ pub mod hpkencrypt;
 pub mod hpksign;
 pub mod id;
 pub mod impl_protobuf;
+pub mod job_queue;
 pub mod key;
 pub mod key_package;
 pub mod key_schedule;

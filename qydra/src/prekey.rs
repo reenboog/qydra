@@ -12,6 +12,12 @@ pub struct KeyPair {
 	pub sig: hpksign::Signature,
 }
 
+pub fn generate(ilum_seed: &ilum::Seed, identity: &hpksign::PrivateKey, num: u8) -> Vec<KeyPair> {
+	(0..num)
+		.map(|_| KeyPair::generate(ilum_seed, identity))
+		.collect()
+}
+
 impl KeyPair {
 	// init keys are signed with an identity (never changes) dilithium key
 	pub fn generate(ilum_seed: &ilum::Seed, identity: &hpksign::PrivateKey) -> Self {

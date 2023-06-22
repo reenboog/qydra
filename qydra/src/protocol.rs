@@ -44,7 +44,7 @@ use crate::{
 	group::{Group, Owner},
 	hpksign,
 	id::{Id, Identifiable},
-	key_package,
+	job_queue, key_package,
 	msg::Msg,
 	nid::{self, Nid},
 	prekey,
@@ -61,7 +61,9 @@ pub enum Error {
 	// the app is locked, retry later
 	DbLocked,
 	NoNetwork,
-	KeyPackageNotFound(Id),
+	// it might be possible for some users not to exists anymore by the moment their orekeys are fetched
+	// what should be done in such a case?
+	PrekeyNotFound(Id),
 	IdentityNotFound(Nid),
 	FailedToJoin,
 	GroupAlreadyExists {
@@ -208,6 +210,10 @@ pub struct OnHandle {
 	outcome: Processed,
 }
 
+pub fn gen_prekeys(identity: &hpksign::PrivateKey, num: u8) -> Vec<prekey::KeyPair> {
+	prekey::generate(ILUM_SEED, identity, num)
+}
+
 #[async_trait]
 pub trait Storage {
 	// TODO: all save_ functions should check for duplicates
@@ -304,6 +310,9 @@ pub struct Protocol<S, A> {
 	api: Arc<A>,
 	update_after: u8,
 	commit_after: u8,
+
+	// queued by Id
+	tasks: job_queue::Queue<Id>,
 	// TODO: introduce is_same_nid comparator
 }
 
@@ -312,6 +321,16 @@ where
 	S: Storage,
 	A: Api,
 {
+	pub fn new(storage: Arc<S>, api: Arc<A>, update_after: u8, commit_after: u8) -> Self {
+		Self {
+			storage,
+			api,
+			update_after,
+			commit_after,
+			tasks: job_queue::Queue::new(),
+		}
+	}
+
 	async fn handle_welcome(
 		&self,
 		wlcm: transport::ReceivedWelcome,

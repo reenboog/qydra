@@ -38,7 +38,7 @@ pub struct MemStore {
 }
 
 impl MemStore {
-	pub fn new(prekeys: HashMap<Id, prekey::KeyPair>, identity: hpksign::KeyPair) -> Self {
+	pub fn new(prekeys: Vec<prekey::KeyPair>, identity: hpksign::KeyPair) -> Self {
 		Self {
 			groups: Arc::new(Mutex::new(HashMap::new())),
 			nids: Arc::new(Mutex::new(Vec::new())),
@@ -49,7 +49,9 @@ impl MemStore {
 			pending_leaves: Arc::new(Mutex::new(HashMap::new())),
 			messages_sent_ctr: Arc::new(Mutex::new(HashMap::new())),
 			pending_admits: Arc::new(Mutex::new(HashMap::new())),
-			prekeys: Arc::new(Mutex::new(prekeys)),
+			prekeys: Arc::new(Mutex::new(
+				prekeys.into_iter().map(|pk| (pk.id(), pk)).collect(),
+			)),
 			identities: Arc::new(Mutex::new(HashMap::new())),
 
 			my_identity: identity,
@@ -427,7 +429,7 @@ impl protocol::Storage for MemStore {
 				.lock()
 				.await
 				.get(&id)
-				.ok_or(Error::KeyPackageNotFound(id))?
+				.ok_or(Error::PrekeyNotFound(id))?
 				.clone())
 		}
 	}
@@ -474,9 +476,62 @@ impl protocol::Storage for MemStore {
 	}
 }
 
+struct MemApi {
+	prekeys: Arc<Mutex<HashMap<Nid, Vec<prekey::PublicKey>>>>,
+	identities: Arc<Mutex<HashMap<Nid, hpksign::PublicKey>>>,
+}
+
+impl MemApi {
+	pub fn new(
+		prekeys: HashMap<Nid, Vec<prekey::PublicKey>>,
+		identities: HashMap<Nid, hpksign::PublicKey>,
+	) -> Self {
+		Self {
+			prekeys: Arc::new(Mutex::new(prekeys)),
+			identities: Arc::new(Mutex::new(identities)),
+		}
+	}
+}
+
+#[async_trait]
+impl protocol::Api for MemApi {
+	// returns init key packages for the specified nids; empty, if nids are empty
+	async fn fetch_prekeys(&self, nids: &[Nid]) -> Result<Vec<prekey::PublicKey>, Error> {
+		// in reality, at least one prekey should always be kept
+		let mut keys = self.prekeys.lock().await;
+		let mut res = Vec::new();
+
+		for nid in nids {
+			let entry = keys.get_mut(&nid).ok_or(Error::IdentityNotFound(*nid))?;
+			let key = entry.pop().ok_or(Error::IdentityNotFound(*nid))?;
+
+			res.push(key.clone());
+
+			if entry.is_empty() {
+				entry.push(key);
+			}
+		}
+
+		Ok(res)
+	}
+
+	// invitees can use it to verify welcome messages; may be stored locally to speed things up and for TOFU purposes
+	async fn fetch_identity_key(&self, nid: &Nid) -> Result<hpksign::PublicKey, Error> {
+		self.identities
+			.lock()
+			.await
+			.get(nid)
+			.cloned()
+			.ok_or(Error::IdentityNotFound(*nid))
+	}
+}
+
 #[cfg(test)]
 mod tests {
+	use std::collections::HashMap;
+
 	use super::MemStore;
+	use crate::mem_store::MemApi;
 	use qydra::{
 		ed25519,
 		group::{Group, Owner},
@@ -486,13 +541,65 @@ mod tests {
 		nid::Nid,
 		prekey,
 		proposal::{FramedProposal, Proposal},
-		protocol::{Error, Storage},
+		protocol::{self, Error, Storage, Api},
 	};
-	use std::collections::HashMap;
+
+	#[tokio::test]
+	async fn test_api_fetch_prekey() -> Result<(), Error> {
+		let alice = hpksign::KeyPair::generate();
+		let alice_id = Nid::new(b"aaaaaaaa", 0);
+		let alice_prekeys = protocol::gen_prekeys(&alice.private, 2);
+		let bob_id = Nid::new(b"bbbbbbbb", 0);
+		let bob = hpksign::KeyPair::generate();
+		let bob_prekeys = protocol::gen_prekeys(&bob.private, 2);
+		let prekeys: HashMap<Nid, Vec<prekey::PublicKey>> = vec![
+			(
+				alice_id,
+				alice_prekeys
+					.into_iter()
+					.map(|pk| prekey::PublicKey {
+						kp: pk.kp.public,
+						identity: alice.public.clone(),
+						sig: pk.sig,
+					})
+					.collect(),
+			),
+			(
+				bob_id,
+				bob_prekeys
+					.into_iter()
+					.map(|pk| prekey::PublicKey {
+						kp: pk.kp.public,
+						identity: bob.public.clone(),
+						sig: pk.sig,
+					})
+					.collect(),
+			),
+		]
+		.into_iter()
+		.collect();
+		let identities: HashMap<Nid, hpksign::PublicKey> =
+			vec![(alice_id, alice.public), (bob_id, bob.public)]
+				.into_iter()
+				.collect();
+		let api = MemApi::new(prekeys, identities);
+
+		let keys_0 = api.fetch_prekeys(&vec![alice_id, bob_id]).await?;
+		let keys_1 = api.fetch_prekeys(&vec![alice_id, bob_id]).await?;
+		// I have only 2 sets of keys, so 2-3 will be using last resort keys basically
+		let keys_2 = api.fetch_prekeys(&vec![alice_id, bob_id]).await?;
+		let keys_3 = api.fetch_prekeys(&vec![alice_id, bob_id]).await?;
+
+		assert_ne!(keys_0, keys_1);
+		assert_eq!(keys_1, keys_2);
+		assert_eq!(keys_2, keys_3);
+
+		Ok(())
+	}
 
 	#[tokio::test]
 	async fn test_lock_unlock() -> Result<(), Error> {
-		let mut store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let mut store = MemStore::new(vec![], hpksign::KeyPair::generate());
 
 		store.lock(true);
 		// this one should fail, since store is locked
@@ -513,7 +620,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_get_set_remove_nids_for_nid() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 
 		store
 			.save_nids(&vec![Nid::new(b"abcdefgh", 0), Nid::new(b"abcdefgh", 1)])
@@ -563,7 +670,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_should_process_rcvd() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 		let id = Id([1u8; 32]);
 
 		assert_eq!(store.should_process_rcvd(id).await, Ok(true));
@@ -577,7 +684,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_save_get_delete_props() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 
 		let group_a = Id([1u8; 32]);
 		let group_b = Id([2u8; 32]);
@@ -676,7 +783,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_inc_sent_msg_count() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 		let guid = Id([12u8; 32]);
 
 		assert_eq!(store.inc_sent_msg_count(guid, 0).await, Ok(0));
@@ -693,7 +800,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_pending_admit() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 
 		let group_a = Id([11u8; 32]);
 		let group_b = Id([21u8; 32]);
@@ -730,7 +837,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_get_save_delete_group() -> Result<(), Error> {
-		let store = MemStore::new(HashMap::new(), hpksign::KeyPair::generate());
+		let store = MemStore::new(vec![], hpksign::KeyPair::generate());
 		let seed = [12u8; 16];
 		let alice_identity = hpksign::KeyPair::generate();
 		let alice_kp = key_package::KeyPair::generate(&seed);
