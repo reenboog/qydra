@@ -238,12 +238,18 @@ message SendLeave {
 	// something needs to be sent to verify this leave, eg an optional farewell message or a ts?
 	// this could be a sub message of SendMsg instead, but it's better to keep things separated
 	required SendMsg farewell = 1;
+	// a random id to make leaves unique
+	// TODO: should it be handled by a higher level
+	required bytes id = 2;
 }
 
 message SendAdmit {
-	// sent to each newly invited user by the inviter once the commit is accepted and processed; until then,
+	// sent to each newly invited user by the inviter (and to everyone else actually) once the commit is accepted and processed; until then,
 	// invitees MUST process all messages, but not send anything and not anyhow react; ideally the group should be hidden
 	required SendMsg greeting = 1;
+	// a random id to make admissions unique
+	// TODO: should it be handled by a higher level?
+	required bytes id = 2;
 }
 
 message SendAdd {
@@ -341,11 +347,21 @@ message ReceivedEdit {
 	required ReceivedCommit commit = 2;
 }
 
+message ReceivedAdmit {
+	required Ciphertext greeting = 1;
+	required bytes id = 2;
+}
+
+message ReceivedLeave {
+	required Ciphertext farewell = 1;
+	required bytes id = 2;
+}
+
 message Received {
 	oneof variant {
 		ReceivedWelcome wlcm = 1;
 		ReceivedAdd add = 2;
-		Ciphertext admit = 3;
+		ReceivedAdmit admit = 3;
 		ReceivedRemove remove = 4;
 		ReceivedEdit edit = 5;
 		// update proposals, but can be more generic
@@ -353,7 +369,7 @@ message Received {
 		// update commit, but can be more generic
 		ReceivedCommit commit = 7;
 		// a request to leave, contains a farewell message (Msg)
-		Ciphertext leave = 8;
+		ReceivedLeave leave = 8;
 		// an arbitrary app message
 		Ciphertext msg = 9;
 	}

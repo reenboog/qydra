@@ -1202,6 +1202,7 @@ impl From<&transport::SendLeave> for SendLeave {
 	fn from(val: &transport::SendLeave) -> Self {
 		Self {
 			farewell: (&val.farewell).into(),
+			id: val.id.as_bytes().to_vec(),
 		}
 	}
 }
@@ -1221,6 +1222,7 @@ impl TryFrom<SendLeave> for transport::SendLeave {
 				.farewell
 				.try_into()
 				.or(Err(Error::BadCiphertextFormat))?,
+			id: id::Id(val.id.try_into().or(Err(Error::WrongIdSize))?),
 		})
 	}
 }
@@ -1241,6 +1243,7 @@ impl From<&transport::SendAdmit> for SendAdmit {
 	fn from(val: &transport::SendAdmit) -> Self {
 		Self {
 			greeting: (&val.greeting).into(),
+			id: val.id.as_bytes().to_vec(),
 		}
 	}
 }
@@ -1260,6 +1263,7 @@ impl TryFrom<SendAdmit> for transport::SendAdmit {
 				.greeting
 				.try_into()
 				.or(Err(Error::BadCiphertextFormat))?,
+			id: id::Id(val.id.try_into().or(Err(Error::WrongIdSize))?),
 		})
 	}
 }
@@ -1925,6 +1929,88 @@ impl Deserializable for transport::ReceivedEdit {
 		Self: Sized,
 	{
 		Self::try_from(ReceivedEdit::decode(buf).or(Err(Error::BadReceivedEditFormat))?)
+	}
+}
+
+// ReceivedAdmit
+impl From<&transport::ReceivedAdmit> for ReceivedAdmit {
+	fn from(val: &transport::ReceivedAdmit) -> Self {
+		Self {
+			greeting: (&val.welcome).into(),
+			id: val.id.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for transport::ReceivedAdmit {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedAdmit::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedAdmit> for transport::ReceivedAdmit {
+	type Error = Error;
+
+	fn try_from(val: ReceivedAdmit) -> Result<Self, Self::Error> {
+		Ok(Self {
+			welcome: val
+				.greeting
+				.try_into()
+				.or(Err(Error::BadCiphertextFormat))?,
+			id: id::Id(val.id.try_into().or(Err(Error::WrongIdSize))?),
+		})
+	}
+}
+
+impl Deserializable for transport::ReceivedAdmit {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedAdmit::decode(buf).or(Err(Error::BadReceivedAdmitFormat))?)
+	}
+}
+
+// ReceivedLeave
+impl From<&transport::ReceivedLeave> for ReceivedLeave {
+	fn from(val: &transport::ReceivedLeave) -> Self {
+		Self {
+			farewell: (&val.farewell).into(),
+			id: val.id.as_bytes().to_vec(),
+		}
+	}
+}
+
+impl Serializable for transport::ReceivedLeave {
+	fn serialize(&self) -> Vec<u8> {
+		ReceivedLeave::from(self).encode_to_vec()
+	}
+}
+
+impl TryFrom<ReceivedLeave> for transport::ReceivedLeave {
+	type Error = Error;
+
+	fn try_from(val: ReceivedLeave) -> Result<Self, Self::Error> {
+		Ok(Self {
+			farewell: val
+				.farewell
+				.try_into()
+				.or(Err(Error::BadCiphertextFormat))?,
+			id: id::Id(val.id.try_into().or(Err(Error::WrongIdSize))?),
+		})
+	}
+}
+
+impl Deserializable for transport::ReceivedLeave {
+	type Error = Error;
+
+	fn deserialize(buf: &[u8]) -> Result<Self, Self::Error>
+	where
+		Self: Sized,
+	{
+		Self::try_from(ReceivedLeave::decode(buf).or(Err(Error::BadReceivedLeaveFormat))?)
 	}
 }
 
@@ -2659,7 +2745,10 @@ mod tests {
 			payload: ct,
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
-		let sl = transport::SendLeave { farewell: sm };
+		let sl = transport::SendLeave {
+			farewell: sm,
+			id: id::Id([11u8; 32]),
+		};
 		let serialized = sl.serialize();
 		let deserialized = transport::SendLeave::deserialize(&serialized);
 
@@ -2683,11 +2772,60 @@ mod tests {
 			payload: ct,
 			recipients: vec![nid::Nid::new(b"abcdefgh", 0), nid::Nid::new(b"abcdefgt", 2)],
 		};
-		let sa = transport::SendAdmit { greeting: sm };
+		let sa = transport::SendAdmit {
+			greeting: sm,
+			id: id::Id([22u8; 32]),
+		};
 		let serialized = sa.serialize();
 		let deserialized = transport::SendAdmit::deserialize(&serialized);
 
 		assert_eq!(Ok(sa), deserialized);
+	}
+
+	#[test]
+	fn test_received_leave() {
+		let ct = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ra = transport::ReceivedLeave {
+			farewell: ct,
+			id: id::Id([22u8; 32]),
+		};
+		let serialized = ra.serialize();
+		let deserialized = transport::ReceivedLeave::deserialize(&serialized);
+
+		assert_eq!(Ok(ra), deserialized);
+	}
+
+	#[test]
+	fn test_received_admit() {
+		let ct = ciphertext::Ciphertext {
+			content_id: id::Id([12u8; 32]),
+			payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+			guid: id::Id([34u8; 32]),
+			epoch: 77,
+			gen: 1984,
+			iv: aes_gcm::Iv([78u8; 12]),
+			sig: ed25519::Signature::new([90u8; ed25519::Signature::SIZE]),
+			mac: hmac::Digest([11u8; 32]),
+			reuse_grd: reuse_guard::ReuseGuard::new(),
+		};
+		let ra = transport::ReceivedAdmit {
+			welcome: ct,
+			id: id::Id([22u8; 32]),
+		};
+		let serialized = ra.serialize();
+		let deserialized = transport::ReceivedAdmit::deserialize(&serialized);
+
+		assert_eq!(Ok(ra), deserialized);
 	}
 
 	#[test]

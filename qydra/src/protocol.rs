@@ -53,6 +53,7 @@ use crate::{
 };
 
 // a randomly generated public seed that is to be used for all instances of this protocol in order for mPKE to work
+// FIXME: add as a compile time parameter?
 pub const ILUM_SEED: &[u8; 16] =
 	b"\x96\x48\xb8\x08\x8b\x16\x1c\xf1\x22\xee\xb4\x5a\x29\x69\x02\x43";
 
@@ -163,11 +164,11 @@ pub struct Encrypted {
 
 pub enum Processed {
 	Welcome,
-	// Option<Send> is used to add any of my missing/remove detached devices
-	Admit(Option<transport::Send>),
+	// Option<Send> of Error::NeedsAction is used to add any of my missing/remove detached devices
+	Admit,
 	Add(OnAdd),
 	Remove(OnRemove),
-	// if farewell is Some, someone left; otherwise – me
+	// if farewell is Some, someone left; otherwise – me or my other device
 	Leave { farewell: Option<Msg> },
 	Edit(OnEdit),
 	Update,
@@ -205,9 +206,9 @@ pub struct OnEdit {
 }
 
 pub struct OnHandle {
-	sender: Nid,
-	guid: Id,
-	outcome: Processed,
+	pub sender: Nid,
+	pub guid: Id,
+	pub outcome: Processed,
 }
 
 pub fn gen_prekeys(identity: &hpksign::PrivateKey, num: u8) -> Vec<prekey::KeyPair> {
@@ -289,6 +290,7 @@ pub trait Storage {
 
 	// someone used my public keys to invite me
 	async fn get_my_prekey(&self, id: Id) -> Result<prekey::KeyPair, Error>;
+	// FIXME: ensure last resort key is never removed
 	async fn delete_my_prekey(&self, id: Id) -> Result<(), Error>;
 
 	// TODO: introduce topup
@@ -336,7 +338,7 @@ where
 		wlcm: transport::ReceivedWelcome,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
+	) -> Result<OnHandle, Error> {
 		// check if we already have identity keys for the sender; fetch and save, if not
 		let inviter_identity = match self.storage.get_identity_key(&sender).await {
 			Ok(key) => Ok(key),
@@ -392,7 +394,15 @@ where
 		}?;
 
 		self.save_group(&group).await?;
-		self.storage.mark_as_pending_admit(guid, sender, true).await
+		self.storage
+			.mark_as_pending_admit(guid, sender, true)
+			.await?;
+
+		Ok(OnHandle {
+			sender,
+			guid,
+			outcome: Processed::Welcome,
+		})
 	}
 
 	// if some of my devices are missing in the roster, add them - therefore Error::NeedsAction(transport::Send); otherwise - Ok(())
@@ -402,21 +412,20 @@ where
 	// hence it is suggested not to display groups pending admission
 	async fn handle_admit(
 		&self,
-		admit: Ciphertext,
+		admit: transport::ReceivedAdmit,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
-		let guid = admit.guid;
-		let epoch = admit.epoch;
-		let id = admit.content_id;
+	) -> Result<OnHandle, Error> {
+		let guid = admit.welcome.guid;
+		let epoch = admit.welcome.epoch;
 
 		// I won't be able to decrypt my own admission anyway
 		if sender != receiver && self.storage.is_pending_admit(guid).await? {
 			let mut group = self.storage.get_group(&guid, epoch).await?;
 			let Msg(greeting) = group
-				.decrypt::<Msg>(admit, ContentType::Msg, &sender)
+				.decrypt::<Msg>(admit.welcome, ContentType::Msg, &sender)
 				.or(Err(Error::FailedToDecrypt {
-					id,
+					id: admit.id,
 					content_type: ContentType::Msg,
 					sender,
 					guid,
@@ -434,7 +443,11 @@ where
 
 				// add missing/remove detached devices of myself, if any
 				match self.add(&[receiver], receiver, guid).await {
-					Err(Error::NoChangeRequired { .. }) => Ok(()),
+					Err(Error::NoChangeRequired { .. }) => Ok(OnHandle {
+						sender,
+						guid,
+						outcome: Processed::Admit,
+					}),
 					Err(e) => Err(e),
 					Ok(r) => Err(Error::NeedsAction(r)),
 				}
@@ -442,7 +455,10 @@ where
 				Err(Error::UnknownAdmit { guid, greeting })
 			}
 		} else {
-			Ok(())
+			Err(Error::NoChangeRequired {
+				guid,
+				ctx: "handle_admit: my own or no pending admit".to_string(),
+			})
 		}
 	}
 
@@ -455,7 +471,7 @@ where
 		add: transport::ReceivedAdd,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<OnAdd, Error> {
+	) -> Result<OnHandle, Error> {
 		use std::cmp::Ordering::*;
 
 		let epoch = add.commit.cti.epoch;
@@ -614,15 +630,15 @@ where
 				let admit = match latest.process(&fc, Some(add.commit.ctd).as_ref(), &diff.props) {
 					Ok(Some(mut new_group)) => {
 						let admit = if sender == receiver {
-							Some(transport::Send::Admit(transport::SendAdmit {
-								greeting: transport::SendMsg {
+							Some(transport::Send::Admit(transport::SendAdmit::new(
+								transport::SendMsg {
 									// guid is used as a greeting for the cross check purpose
 									payload: new_group
 										.encrypt(&Msg(guid.as_bytes().to_vec()), ContentType::Msg),
 									// joined & attached could be used instead, but it's fine
 									recipients: new_group.roster().ids(),
 								},
-							}))
+							)))
 						} else {
 							None
 						};
@@ -661,12 +677,16 @@ where
 				// FIXME: self.storage.remove_nids_for_nid(fps.1.detached, sender)
 				// FIXME: ^same for each fps.1.joined (get unique and sort-map)?
 
-				Ok(OnAdd {
-					joined: diff.joined,
-					attached: diff.attached,
-					detached: diff.detached,
-					left: diff.left,
-					admit,
+				Ok(OnHandle {
+					sender,
+					guid,
+					outcome: Processed::Add(OnAdd {
+						joined: diff.joined,
+						attached: diff.attached,
+						detached: diff.detached,
+						left: diff.left,
+						admit,
+					}),
 				})
 			}
 			Greater => {
@@ -688,7 +708,7 @@ where
 		sender: Nid,
 		remove: transport::ReceivedRemove,
 		receiver: Nid,
-	) -> Result<OnRemove, Error> {
+	) -> Result<OnHandle, Error> {
 		use std::cmp::Ordering::*;
 
 		let epoch = remove.cti.epoch;
@@ -871,10 +891,14 @@ where
 
 				// FIXME: self.storage.remove_nids_for_nid(fps.1.detached, sender)
 
-				Ok(OnRemove {
-					evicted: diff.evicted,
-					left: diff.left,
-					detached: diff.detached,
+				Ok(OnHandle {
+					sender,
+					guid,
+					outcome: Processed::Remove(OnRemove {
+						evicted: diff.evicted,
+						left: diff.left,
+						detached: diff.detached,
+					}),
 				})
 			}
 			Greater => {
@@ -895,7 +919,7 @@ where
 		edit: transport::ReceivedEdit,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<OnEdit, Error> {
+	) -> Result<OnHandle, Error> {
 		// it is worth nothing, cases similar to "delayed remove/add" are possible when changing access rules:
 		// eg, a delayed revoke for an already revoked/re-granted token should be ok as long as access level still allows that
 		use std::cmp::Ordering::*;
@@ -1053,9 +1077,13 @@ where
 				)
 				.await?;
 
-				Ok(OnEdit {
-					left: diff.left,
-					desc: diff.desc,
+				Ok(OnHandle {
+					sender,
+					guid,
+					outcome: Processed::Edit(OnEdit {
+						left: diff.left,
+						desc: diff.desc,
+					}),
 				})
 			}
 			Greater =>
@@ -1076,13 +1104,13 @@ where
 		props: transport::ReceivedProposal,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<(), Error> {
+	) -> Result<OnHandle, Error> {
 		use std::cmp::Ordering::*;
 
 		// in gegenral, props should contain only one update and optionally several remove props (if any pending removes are present)
 		// my props are already saved, so ignore them
-		if sender != receiver {
-			if let Some(guid) = props.props.first().map(|p| p.guid) {
+		if let Some(guid) = props.props.first().map(|p| p.guid) {
+			if sender != receiver {
 				let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 				let epoch = latest.epoch();
 				// ensure all props are coming from the same epoch
@@ -1108,7 +1136,13 @@ where
 					// decryption changes state, so save the group
 					self.save_group(&latest).await?;
 					// and store the received props
-					self.storage.save_props(&props, epoch, guid, None).await
+					self.storage.save_props(&props, epoch, guid, None).await?;
+
+					Ok(OnHandle {
+						sender,
+						guid,
+						outcome: Processed::Update,
+					})
 				} else {
 					// it's OutdatedProps actually
 					Err(Error::OutdatedProp {
@@ -1118,10 +1152,13 @@ where
 					})
 				}
 			} else {
-				Err(Error::EmptyProps { sender })
+				Err(Error::NoChangeRequired {
+					guid,
+					ctx: "handle_props: my own props".to_string(),
+				})
 			}
 		} else {
-			Ok(())
+			Err(Error::EmptyProps { sender })
 		}
 	}
 
@@ -1132,7 +1169,7 @@ where
 		commit: transport::ReceivedCommit,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<Vec<Nid>, Error> {
+	) -> Result<OnHandle, Error> {
 		use std::cmp::Ordering::*;
 
 		let guid = commit.cti.guid;
@@ -1225,7 +1262,11 @@ where
 				)
 				.await?;
 
-				Ok(diff.left)
+				Ok(OnHandle {
+					sender,
+					guid,
+					outcome: Processed::Commit { left: diff.left },
+				})
 			}
 			Greater => Err(Error::TooNewEpoch {
 				epoch,
@@ -1241,11 +1282,12 @@ where
 		ct: Ciphertext,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<Option<Vec<u8>>, Error> {
+	) -> Result<OnHandle, Error> {
+		let guid = ct.guid;
+		let epoch = ct.epoch;
+		let id = ct.content_id;
+
 		if sender != receiver {
-			let guid = ct.guid;
-			let epoch = ct.epoch;
-			let id = ct.content_id;
 			let mut group = self.storage.get_group(&guid, epoch).await?;
 			let pt = group.decrypt::<Msg>(ct, ContentType::Msg, &sender).or(Err(
 				Error::FailedToDecrypt {
@@ -1260,26 +1302,33 @@ where
 
 			self.save_group(&group).await?;
 
-			Ok(Some(pt.0))
+			Ok(OnHandle {
+				sender,
+				guid,
+				outcome: Processed::Msg(pt.0),
+			})
 		} else {
-			Ok(None)
+			Err(Error::NoChangeRequired {
+				guid,
+				ctx: "handle_msh: my own message".to_string(),
+			})
 		}
 	}
 
 	async fn handle_leave(
 		&self,
-		ct: Ciphertext,
+		leave: transport::ReceivedLeave,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<Option<Msg>, Error> {
+	) -> Result<OnHandle, Error> {
 		// if it takes too long for q to deliver, nid might be already removed, and even re-added,
 		// so that this remove would make no sense anymore:
 		// *---------------->---->
 		// q, m, u, u, m, r, a, m
 		// to fight that, Member::joinead_at_epoch is used below
 
-		let guid = ct.guid;
-		let epoch = ct.epoch;
+		let guid = leave.farewell.guid;
+		let epoch = leave.farewell.epoch;
 		let latest = self.storage.get_latest_epoch_for_group(guid).await?;
 		// user could be already removed – just ignore, if that's a case
 		let user = latest
@@ -1291,27 +1340,40 @@ where
 
 		if epoch < user.joined_at_epoch {
 			// this user has been re-added since this leave was sent (an almost impossible case); no action required
-			Ok(None)
+			Err(Error::NoChangeRequired {
+				guid,
+				ctx: "handle_leave: epoch < user.joined_at".to_string(),
+			})
 		} else {
 			// is this my leave request?
 			if sender == receiver {
 				// if content_id doesn't match, someone is trying to fake me leaving
-				if self.storage.is_pending_leave(guid, ct.content_id).await? {
+				if self.storage.is_pending_leave(guid, leave.id).await? {
 					// it's my own leave, so just quit
 					self.delete_group(&guid).await?;
 				}
 
-				Ok(None)
+				Ok(OnHandle {
+					sender,
+					guid,
+					outcome: Processed::Leave { farewell: None },
+				})
 			} else {
 				let mut group = self.storage.get_group(&guid, epoch).await?;
 
 				// ensure it's actually a leave message
-				if let Ok(msg) = group.decrypt::<Msg>(ct.clone(), ContentType::Msg, &sender) {
+				if let Ok(msg) =
+					group.decrypt::<Msg>(leave.farewell.clone(), ContentType::Msg, &sender)
+				{
 					if receiver.is_same_id(&sender) {
 						// I left on one of my other devices – remove this group immediately
-						self.delete_group(&ct.guid).await?;
+						self.delete_group(&leave.farewell.guid).await?;
 
-						Ok(None)
+						Ok(OnHandle {
+							sender,
+							guid,
+							outcome: Processed::Leave { farewell: None },
+						})
 					} else {
 						// an encryption key has been consumed, so save the group to keep FS
 						self.save_group(&group).await?;
@@ -1321,12 +1383,18 @@ where
 							.await?;
 
 						// msg can be used to display the sender's farewell in the chat, if specified
-						Ok(Some(msg))
+						Ok(OnHandle {
+							sender,
+							guid,
+							outcome: Processed::Leave {
+								farewell: Some(msg),
+							},
+						})
 					}
 				} else {
 					// someone sent this leave, but I failed to decrypt it; should not happen
 					Err(Error::FailedToDecrypt {
-						id: ct.content_id,
+						id: leave.id,
 						content_type: ContentType::Msg,
 						sender,
 						guid,
@@ -1401,7 +1469,12 @@ where
 	// may return Send { SendInvite } + remove props in case someone invited my removed devices
 	// may also return Send { SendRemove }, if it's just my removed devices
 	// handle_add -> add(nids_to_retry)
-	async fn add(&self, invitees: &[Nid], sender: Nid, guid: Id) -> Result<transport::Send, Error> {
+	pub async fn add(
+		&self,
+		invitees: &[Nid],
+		sender: Nid,
+		guid: Id,
+	) -> Result<transport::Send, Error> {
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
 		} else {
@@ -1520,18 +1593,18 @@ where
 		} else {
 			let mut latest = self.storage.get_latest_epoch_for_group(guid).await?;
 			let ct = latest.encrypt(&Msg(farewell.to_vec()), ContentType::Msg);
-			let req_id = ct.content_id;
 			let farewell = SendMsg {
 				payload: ct,
 				recipients: latest.roster().ids(),
 			};
+			let leave = SendLeave::new(farewell);
 
 			self.save_group(&latest).await?;
 			self.storage
-				.mark_as_pending_leave(guid, true, req_id)
+				.mark_as_pending_leave(guid, true, leave.id)
 				.await?;
 
-			Ok(transport::Send::Leave(SendLeave { farewell }))
+			Ok(transport::Send::Leave(leave))
 		}
 	}
 
@@ -1612,88 +1685,58 @@ where
 		}
 	}
 
-	// handling Rcvd might required resending. Hence Option<transport::Send>
 	pub async fn handle_received(
 		&self,
 		rcvd: transport::Received,
 		sender: Nid,
 		receiver: Nid,
-	) -> Result<Option<transport::Send>, Error> {
+	) -> Result<OnHandle, Error> {
 		use transport::Received::*;
 
-		let id = rcvd.id();
+		let rcvd_id = rcvd.id();
 
-		if self.storage.should_process_rcvd(id).await? {
+		if self.storage.should_process_rcvd(rcvd_id).await? {
 			// TODO: if sender is pending_remove, ignore or throw?
 			// TODO: if pending_leave(guid) ignore except for ReceivedLeave & Remove or should I really care?
 
-			// FIXME: now, return proper result from each handle_*
-
 			let res = match rcvd {
-				Welcome(w) => {
-					self.handle_welcome(w, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Add(a) => {
-					self.handle_add(a, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Admit(a) => {
-					self.handle_admit(a, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Remove(r) => {
-					self.handle_remove(sender, r, receiver).await?;
-
-					Ok(None)
-				}
-				Edit(e) => {
-					self.handle_edit(e, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Props(p) => {
-					self.handle_props(p, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Commit(c) => {
-					self.handle_commit(c, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Leave(l) => {
-					self.handle_leave(l, sender, receiver).await?;
-
-					Ok(None)
-				}
-				Msg(m) => {
-					self.handle_msg(m, sender, receiver).await?;
-
-					Ok(None)
-				}
+				Welcome(w) => self.handle_welcome(w, sender, receiver).await,
+				Add(a) => self.handle_add(a, sender, receiver).await,
+				Admit(a) => self.handle_admit(a, sender, receiver).await,
+				Remove(r) => self.handle_remove(sender, r, receiver).await,
+				Edit(e) => self.handle_edit(e, sender, receiver).await,
+				Props(p) => self.handle_props(p, sender, receiver).await,
+				Commit(c) => self.handle_commit(c, sender, receiver).await,
+				Leave(l) => self.handle_leave(l, sender, receiver).await,
+				Msg(m) => self.handle_msg(m, sender, receiver).await,
 			};
 
-			self.storage.mark_rcvd_as_processed(id).await?;
+			// some errors are ok actually: NeedsAction, NoChangeRequired, so mark rcvd as processed first and the unwrap
+			self.storage.mark_rcvd_as_processed(rcvd_id).await?;
 
-			res
+			Ok(res?)
 		} else {
-			Err(Error::AlreadyProcessed(id))
+			Err(Error::AlreadyProcessed(rcvd_id))
 		}
 	}
 
-	// invitees should NOT contain the group owner, or the process will fail upon proposing
-	// should contain all devices of all users here, so user's identity (includes devices) should be fetched in advance
-	// wlcm: a1, b1, b2, b3
-	// add: b4
+	// each invitee is to expect the complete roster to be sent to him which is asymptotically dominated
+	// by the ilum key size (768 bytes per key), so each welcome message is N * 768 bytes to send;
+	// on the other hand, every current user should expect a commit whose size is also defined by the invitees's ilum key * number of invitees
+	// with that said, for example, to create a group of 1000 users from scratch it would take ~ 2MB of data to send
 	pub async fn create_group(
 		&self,
 		owner_id: Nid,
 		invitees: &[Nid],
-	) -> Result<(Id, transport::SendInvite), Error> {
+	) -> Result<(Id, transport::Send), Error> {
+		// get all nids for the owner and for each invitee first
+		let invitees = self
+			.get_nids_for_nids(&[invitees, &[owner_id]].concat())
+			.await?
+			.into_iter()
+			.filter(|nid| *nid != owner_id)
+			.collect::<Vec<Nid>>();
+
 		if invitees.is_empty() {
 			Err(Error::NoEmptyGroupsAllowed)
 		} else {
@@ -1705,46 +1748,57 @@ where
 				identity,
 			};
 			// fetch prekeys for each invitee
-			let kps = self.api.fetch_prekeys(invitees).await?;
+			let kps = self.api.fetch_prekeys(&invitees).await?;
 			// create a group of size 1 containing just me
 			let mut group = Group::create(ILUM_SEED.to_owned(), owner);
 			// propose to add everyone
-			let fps = invitees
+			// FIXME: what if less keys are returned, eg some nodes are deactivated? filter `invitees` and retry?
+			let (props_to_save, props_to_send): (Vec<_>, Vec<_>) = invitees
 				.into_iter()
 				.zip(kps.into_iter())
 				.map(|(nid, kp)| {
-					group
-						.propose_add(*nid, kp)
-						.map(|(fp, _)| fp)
-						.map_err(|e| Error::FailedToAdd {
-							nid: *nid,
-							ctx: format!("{:#?}", e),
-						})
+					group.propose_add(nid, kp).map_err(|e| Error::FailedToAdd {
+						nid: nid,
+						ctx: format!("{:#?}", e),
+					})
 				})
-				.collect::<Result<Vec<FramedProposal>, Error>>()?;
+				.collect::<Result<Vec<_>, Error>>()?
+				.into_iter()
+				.unzip();
 
-			// commit the proposal
-			let (fc, _, ctds, wlcms) = group.commit(&fps).map_err(|e| Error::CantCreate {
-				ctx: format!("{:#?}", e),
-			})?;
-			// this processed group will now have everyone in it
-			let group = group
-				.process(&fc, ctds.first().unwrap().ctd.as_ref(), &fps)
-				.unwrap()
-				.unwrap();
+			// welcomes are sent to everyone but owner; commit is sent to the owner
+			let (commit, cti, ctds, wlcms) =
+				group
+					.commit(&props_to_save)
+					.map_err(|e| Error::CantCreate {
+						ctx: format!("{:#?}", e),
+					})?;
 
+			self.storage
+				.save_props(
+					&props_to_save,
+					group.epoch(),
+					group.uid(),
+					Some(commit.id()),
+				)
+				.await?;
+			self.storage
+				.save_commit(&commit, commit.id(), group.uid())
+				.await?;
 			self.save_group(&group).await?;
 
 			let (wcti, wctds) = wlcms.unwrap();
 			let invite = transport::SendInvite {
 				wcti,
 				wctds,
-				// the group has just been created, so there's nobody to to process this commit but me
-				add: None,
+				add: Some(transport::SendAdd {
+					props: props_to_send,
+					commit: transport::SendCommit { cti, ctds },
+				}),
 			};
 
 			// send SendWelcome to everyone
-			Ok((group.uid(), invite))
+			Ok((group.uid(), transport::Send::Invite(invite)))
 		}
 	}
 
@@ -1765,6 +1819,8 @@ where
 			.collect()
 	}
 
+	// each pt should be unique since ct.content_id is used to distinguish duplicates
+	// eah update adds ~ilum key size bytes extra, each commit – ~ilum key size + ilum_ct (=48) * N
 	pub async fn encrypt_msg(&self, pt: &[u8], guid: Id) -> Result<Encrypted, Error> {
 		if self.storage.is_pending_admit(guid).await? {
 			Err(Error::PendingAdmit { guid })
@@ -1850,17 +1906,4 @@ where
 			)
 			.await
 	}
-}
-
-#[cfg(test)]
-mod tests {
-	#[test]
-	fn test_create_group() {
-		//
-	}
-
-	// test_a_device_is_attached_while_nid_is_being_added
-	// test_a_device_is_detached_while_nid_is_being_added
-	// test_a1-a2_are_added_but_a2_is_to_detach_and_a3_is_to_add
-	// tes_a1-a2_are_added_a1_detaches_a2_and_adds_a3_on_post_admit_but_a3_is_added_sooner_so_add_returns_a2_to_detach
 }

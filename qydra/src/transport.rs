@@ -8,6 +8,7 @@ use crate::{
 	welcome::WlcmCtd,
 	welcome::WlcmCti,
 };
+use rand::Rng;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct SendCommit {
@@ -55,11 +56,31 @@ pub struct SendMsg {
 #[derive(PartialEq, Debug, Clone)]
 pub struct SendLeave {
 	pub farewell: SendMsg,
+	pub id: Id,
+}
+
+impl SendLeave {
+	pub fn new(farewell: SendMsg) -> Self {
+		Self {
+			farewell,
+			id: Id(rand::thread_rng().gen()),
+		}
+	}
 }
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct SendAdmit {
 	pub greeting: SendMsg,
+	pub id: Id,
+}
+
+impl SendAdmit {
+	pub fn new(greeting: SendMsg) -> Self {
+		Self {
+			greeting,
+			id: Id(rand::thread_rng().gen()),
+		}
+	}
 }
 
 #[derive(Debug, PartialEq)]
@@ -112,15 +133,27 @@ pub struct ReceivedEdit {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedAdmit {
+	pub id: Id,
+	pub welcome: Ciphertext,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ReceivedLeave {
+	pub id: Id,
+	pub farewell: Ciphertext,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum Received {
 	Welcome(ReceivedWelcome),
 	Add(ReceivedAdd),
-	Admit(Ciphertext),
+	Admit(ReceivedAdmit),
 	Remove(ReceivedRemove),
 	Edit(ReceivedEdit),
 	Props(ReceivedProposal),
 	Commit(ReceivedCommit),
-	Leave(Ciphertext),
+	Leave(ReceivedLeave),
 	Msg(Ciphertext),
 }
 
@@ -129,15 +162,16 @@ impl Identifiable for Received {
 		match self {
 			Received::Welcome(wlcm) => wlcm.cti.id(),
 			Received::Add(add) => add.commit.cti.content_id,
-			Received::Admit(admt) => admt.content_id,
+			Received::Admit(admt) => admt.id,
 			Received::Remove(rmv) => rmv.cti.content_id,
 			Received::Edit(edit) => edit.commit.cti.content_id,
 			Received::Props(props) => props
 				.props
 				.first()
+				// FIXME: implement somehow different?
 				.map_or(Id(hash::empty()), |p| p.content_id),
 			Received::Commit(cmt) => cmt.cti.content_id,
-			Received::Leave(leave) => leave.content_id,
+			Received::Leave(leave) => leave.id,
 			Received::Msg(msg) => msg.content_id,
 		}
 	}

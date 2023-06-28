@@ -11,3 +11,6 @@ qydra = { path = "../qydra" }
 tokio = { version = "1", features = ["full"] }
 async-trait = { version = "0.1" }
 futures = { version = "0.3" }
+
+# randomness
+rand = { version = "0.8.5" }

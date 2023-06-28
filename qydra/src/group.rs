@@ -88,6 +88,7 @@ pub struct Group {
 	conf_trans_hash: Hash,
 	interim_trans_hash: Hash, // trans_tag could be stored instead to derive interim_hash on the fly
 
+	// FIXME: detach for faster reads/writes from the db?
 	roster: Roster,
 
 	// TODO: move to a higher level entity
