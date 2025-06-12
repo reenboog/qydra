@@ -20,4 +20,8 @@ qydra is suitable for applications requiring lightweight group messaging securit
 - Encrypted broadcast/multicast systems
 - Experimental secure group transport layers
 
-Just instantiate Protocol (qydra/src/protocol.rs) providing implementations for Storage and Api traits to create groups and manage groups.
+Just instantiate Protocol (qydra/src/protocol.rs) providing implementations for Storage and Api traits to create groups and manage groups. Also, checking test_normal_flow (playground/src/main.rs) could be helpful.
+
+To run tests, an increased stack is required, eg 
+
+env RUST_MIN_STACK=7194304 cargo test
